@@ -39,7 +39,7 @@ const btnPerspective = document.getElementById('btn-perspective');
 const btnOrtho = document.getElementById('btn-ortho');
 const focalSlider = document.getElementById('focal-slider');
 const focalValue = document.getElementById('focal-value');
-const focalGroup = document.getElementById('focal-group');
+const focalBox = document.getElementById('focal-box');
 const zoomSlider = document.getElementById('zoom-slider');
 const zoomValue = document.getElementById('zoom-value');
 const pitchSlider = document.getElementById('pitch-slider');
@@ -51,7 +51,7 @@ const loadBtn = document.getElementById('load-btn');
 const modelNameEl = document.getElementById('model-name');
 
 // Control containers for scroll support
-const zoomGroup = document.getElementById('zoom-group');
+const zoomBox = document.getElementById('zoom-box');
 const pitchControl = document.getElementById('pitch-control');
 const speedControl = document.getElementById('speed-control');
 
@@ -79,8 +79,8 @@ function addScrollSupport(container, slider, valueEl, formatFn, updateFn) {
 }
 
 // Apply scroll support to control containers (hover anywhere in the box)
-addScrollSupport(focalGroup, focalSlider, focalValue, v => `${Math.round(v)}mm`, v => CAMERA.focalLength = Math.round(v));
-addScrollSupport(zoomGroup, zoomSlider, zoomValue, v => `${v.toFixed(1)}x`, v => {
+addScrollSupport(focalBox, focalSlider, focalValue, v => `${Math.round(v)}mm`, v => CAMERA.focalLength = Math.round(v));
+addScrollSupport(zoomBox, zoomSlider, zoomValue, v => `${v.toFixed(1)}x`, v => {
     if (CAMERA.type === 'perspective') CAMERA.perspectiveZoom = v;
     else CAMERA.orthoZoom = v;
 });
@@ -107,7 +107,7 @@ btnPerspective.addEventListener('click', () => {
     CAMERA.type = 'perspective';
     btnPerspective.classList.add('active');
     btnOrtho.classList.remove('active');
-    focalGroup.style.display = 'flex';
+    focalBox.style.display = 'flex';
     // Restore perspective zoom
     zoomSlider.value = CAMERA.perspectiveZoom;
     zoomValue.textContent = `${CAMERA.perspectiveZoom.toFixed(1)}x`;
@@ -117,7 +117,7 @@ btnOrtho.addEventListener('click', () => {
     CAMERA.type = 'orthographic';
     btnOrtho.classList.add('active');
     btnPerspective.classList.remove('active');
-    focalGroup.style.display = 'none';
+    focalBox.style.display = 'none';
     // Restore ortho zoom
     zoomSlider.value = CAMERA.orthoZoom;
     zoomValue.textContent = `${CAMERA.orthoZoom.toFixed(1)}x`;

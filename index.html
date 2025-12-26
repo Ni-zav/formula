@@ -151,6 +151,32 @@
             text-align: right;
         }
         
+        /* Scrollable slider box (for Focal/Zoom) */
+        .slider-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+            cursor: ew-resize;
+        }
+        
+        .slider-box:hover {
+            border-color: #333;
+        }
+        
+        .slider-box label {
+            font-size: 10px;
+            color: #555;
+        }
+        
+        .slider-box .value {
+            min-width: 42px;
+            font-size: 11px;
+        }
+        
         /* Model loader section */
         .model-loader {
             display: flex;
@@ -217,6 +243,8 @@
             flex-direction: column;
             gap: 8px;
         }
+        
+
         
         /* Vertical slider control (pitch, speed) */
         .vertical-control {
@@ -291,6 +319,7 @@
         <div class="viewer-area">
             <canvas id="game"></canvas>
             
+            <!-- Right side: Animation controls (Pitch/Speed) -->
             <div class="right-controls">
                 <div class="vertical-control" id="pitch-control">
                     <label>PITCH</label>
@@ -319,20 +348,16 @@
                 </div>
             </div>
             
-            <div class="control-group" id="focal-group">
-                <label>Focal</label>
-                <div class="slider-container">
-                    <input type="range" id="focal-slider" min="8" max="200" value="35">
-                    <span class="value" id="focal-value">35mm</span>
-                </div>
+            <div class="slider-box" id="focal-box">
+                <label>FOCAL</label>
+                <input type="range" id="focal-slider" min="8" max="200" value="35">
+                <span class="value" id="focal-value">35mm</span>
             </div>
             
-            <div class="control-group" id="zoom-group">
-                <label>Zoom</label>
-                <div class="slider-container">
-                    <input type="range" id="zoom-slider" min="0.2" max="3" step="0.1" value="1">
-                    <span class="value" id="zoom-value">1.0x</span>
-                </div>
+            <div class="slider-box" id="zoom-box">
+                <label>ZOOM</label>
+                <input type="range" id="zoom-slider" min="0.2" max="3" step="0.1" value="1">
+                <span class="value" id="zoom-value">1.0x</span>
             </div>
         </div>
         
