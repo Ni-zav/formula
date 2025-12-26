@@ -1,5 +1,16 @@
+# 3D model files (large)
 *.obj
 *.glb
 *.gltf
 *.dae
 *.fbx
+
+# Generated model JS files (large, can be regenerated)
+Porsche_911_GT2.js
+Spider.js
+Only_Spider_with_Animations_Export.js
+Male.OBJ
+
+# Wrangler
+.wrangler/
+node_modules/

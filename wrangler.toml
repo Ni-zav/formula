@@ -1,0 +1,7 @@
+# Cloudflare Workers configuration
+name = "formula-3d-viewer"
+compatibility_date = "2024-12-01"
+
+# Serve static assets from the current directory
+[assets]
+directory = "./"
