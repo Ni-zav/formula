@@ -26,7 +26,7 @@ const CAMERA = {
     pitch: 20,
     
     // Rotation speed multiplier (0 = stopped)
-    rotationSpeed: 1.0,
+    rotationSpeed: 0.5,
     
     // Camera distance from origin
     distance: 1.0,
@@ -46,6 +46,9 @@ const pitchSlider = document.getElementById('pitch-slider');
 const pitchValue = document.getElementById('pitch-value');
 const speedSlider = document.getElementById('speed-slider');
 const speedValue = document.getElementById('speed-value');
+const fileInput = document.getElementById('file-input');
+const loadBtn = document.getElementById('load-btn');
+const modelNameEl = document.getElementById('model-name');
 
 // Control containers for scroll support
 const zoomGroup = document.getElementById('zoom-group');
@@ -84,7 +87,7 @@ addScrollSupport(zoomGroup, zoomSlider, zoomValue, v => `${v.toFixed(1)}x`, v =>
 addScrollSupport(pitchControl, pitchSlider, pitchValue, v => `${Math.round(v)}°`, v => CAMERA.pitch = Math.round(v));
 addScrollSupport(speedControl, speedSlider, speedValue, v => `${v.toFixed(1)}x`, v => CAMERA.rotationSpeed = v);
 
-let savedSpeed = 1.0;
+let savedSpeed = 0.5;
 
 document.addEventListener('keydown', (e) => {
     if (e.code === 'Space') {
@@ -150,6 +153,30 @@ speedSlider.addEventListener('input', (e) => {
 });
 
 // ============================================
+// Initialize sliders to match CAMERA defaults
+// ============================================
+function initSliders() {
+    // Focal slider
+    focalSlider.value = CAMERA.focalLength;
+    focalValue.textContent = `${CAMERA.focalLength}mm`;
+    
+    // Zoom slider (use perspective zoom by default)
+    zoomSlider.value = CAMERA.perspectiveZoom;
+    zoomValue.textContent = `${CAMERA.perspectiveZoom.toFixed(1)}x`;
+    
+    // Pitch slider
+    pitchSlider.value = CAMERA.pitch;
+    pitchValue.textContent = `${CAMERA.pitch}°`;
+    
+    // Speed slider
+    speedSlider.value = CAMERA.rotationSpeed;
+    speedValue.textContent = `${CAMERA.rotationSpeed.toFixed(1)}x`;
+}
+
+// Initialize sliders on load
+initSliders();
+
+// ============================================
 // Derived camera values
 // ============================================
 function getFocalScale() {
@@ -164,38 +191,141 @@ game.height = 800;
 const ctx = game.getContext("2d");
 
 // ============================================
-// Pre-compute optimized data structures
+// Model data structures (will be initialized)
 // ============================================
+let vertexCount = 0;
+let vsFlat = null;
+let edges = [];
+let transformedX = null;
+let transformedY = null;
+let modelLoaded = false;
 
-const vertexCount = vs.length;
-const vsFlat = new Float32Array(vertexCount * 3);
-for (let i = 0; i < vertexCount; i++) {
-    vsFlat[i * 3] = vs[i].x;
-    vsFlat[i * 3 + 1] = vs[i].y;
-    vsFlat[i * 3 + 2] = vs[i].z;
-}
+// Global model data (will be populated when a model is loaded)
+let vs = null;
+let fs = null;
 
-// Build unique edge list
-const edgeSet = new Set();
-const edges = [];
-
-for (const f of fs) {
-    for (let i = 0; i < f.length; ++i) {
-        const a = f[i];
-        const b = f[(i + 1) % f.length];
-        const key = a < b ? `${a}-${b}` : `${b}-${a}`;
-        if (!edgeSet.has(key)) {
-            edgeSet.add(key);
-            edges.push([a, b]);
+// ============================================
+// Initialize model from global vs/fs
+// ============================================
+function initModel() {
+    if (!vs || !fs) {
+        console.warn('Model data not available');
+        return;
+    }
+    
+    vertexCount = vs.length;
+    vsFlat = new Float32Array(vertexCount * 3);
+    
+    for (let i = 0; i < vertexCount; i++) {
+        vsFlat[i * 3] = vs[i].x;
+        vsFlat[i * 3 + 1] = vs[i].y;
+        vsFlat[i * 3 + 2] = vs[i].z;
+    }
+    
+    // Build unique edge list
+    const edgeSet = new Set();
+    edges = [];
+    
+    for (const f of fs) {
+        for (let i = 0; i < f.length; ++i) {
+            const a = f[i];
+            const b = f[(i + 1) % f.length];
+            const key = a < b ? `${a}-${b}` : `${b}-${a}`;
+            if (!edgeSet.has(key)) {
+                edgeSet.add(key);
+                edges.push([a, b]);
+            }
         }
     }
+    
+    // Pre-allocated transformation buffers
+    transformedX = new Float32Array(vertexCount);
+    transformedY = new Float32Array(vertexCount);
+    
+    modelLoaded = true;
+    console.log(`Loaded: ${vertexCount} vertices, ${edges.length} unique edges`);
 }
 
-console.log(`Loaded: ${vertexCount} vertices, ${edges.length} unique edges`);
+// ============================================
+// File browser model loading
+// ============================================
+loadBtn.addEventListener('click', () => {
+    fileInput.click();
+});
 
-// Pre-allocated transformation buffers
-const transformedX = new Float32Array(vertexCount);
-const transformedY = new Float32Array(vertexCount);
+fileInput.addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    if (!file.name.endsWith('.js')) {
+        console.error('Please select a .js file');
+        return;
+    }
+    
+    const reader = new FileReader();
+    reader.onload = (event) => {
+        const code = event.target.result;
+        
+        // Clear previous model data
+        window.vs = undefined;
+        window.fs = undefined;
+        modelLoaded = false;
+        
+        try {
+            // Modify the code to use window assignments instead of const
+            // This allows reloading models without const redeclaration errors
+            const modifiedCode = code
+                .replace(/const\s+vs\s*=/g, 'window.vs =')
+                .replace(/const\s+fs\s*=/g, 'window.fs =')
+                .replace(/let\s+vs\s*=/g, 'window.vs =')
+                .replace(/let\s+fs\s*=/g, 'window.fs =')
+                .replace(/var\s+vs\s*=/g, 'window.vs =')
+                .replace(/var\s+fs\s*=/g, 'window.fs =');
+            
+            // Execute the modified code
+            eval(modifiedCode);
+            
+            // Map window.vs/fs to global vs/fs for compatibility
+            vs = window.vs;
+            fs = window.fs;
+            
+            // Validate that vs and fs exist and are arrays
+            if (!vs || !fs || !Array.isArray(vs) || !Array.isArray(fs)) {
+                throw new Error('Invalid model format');
+            }
+            
+            // Initialize the model
+            initModel();
+            
+            // Update UI with model name (success)
+            const displayName = file.name.replace('.js', '');
+            modelNameEl.textContent = displayName;
+            modelNameEl.classList.remove('empty');
+            modelNameEl.style.color = '#50FF50';
+            
+        } catch (error) {
+            console.error('Failed to load model:', error);
+            
+            // Show warning in UI
+            modelNameEl.textContent = 'Invalid model (missing vs/fs)';
+            modelNameEl.classList.add('empty');
+            modelNameEl.style.color = '#FF5050';
+            modelLoaded = false;
+        }
+    };
+    
+    reader.onerror = () => {
+        console.error('Failed to read file');
+        modelNameEl.textContent = 'Failed to read file';
+        modelNameEl.classList.add('empty');
+        modelNameEl.style.color = '#FF5050';
+    };
+    
+    reader.readAsText(file);
+    
+    // Clear the input so the same file can be selected again
+    fileInput.value = '';
+});
 
 const halfWidth = game.width / 2;
 const halfHeight = game.height / 2;
@@ -274,20 +404,33 @@ function frame() {
     angle += (Math.PI / 60) * CAMERA.rotationSpeed;
     clear();
     
-    transformAllVertices(angle, CAMERA.distance);
-    
-    ctx.strokeStyle = FOREGROUND;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    
-    const edgeCount = edges.length;
-    for (let i = 0; i < edgeCount; i++) {
-        const edge = edges[i];
-        ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
-        ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+    // Only render if model is loaded
+    if (modelLoaded && vertexCount > 0) {
+        transformAllVertices(angle, CAMERA.distance);
+        
+        ctx.strokeStyle = FOREGROUND;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        
+        const edgeCount = edges.length;
+        for (let i = 0; i < edgeCount; i++) {
+            const edge = edges[i];
+            ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
+            ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+        }
+        
+        ctx.stroke();
+    } else {
+        // Show placeholder text when no model is loaded
+        ctx.fillStyle = "#333";
+        ctx.font = "14px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("No model loaded", halfWidth, halfHeight - 10);
+        ctx.fillStyle = "#555";
+        ctx.font = "12px monospace";
+        ctx.fillText("Click 'Load .js' to select a model file", halfWidth, halfHeight + 15);
+        ctx.textAlign = "left";
     }
-    
-    ctx.stroke();
     
     // Info overlay
     ctx.fillStyle = "#666";

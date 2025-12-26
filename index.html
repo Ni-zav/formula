@@ -151,6 +151,62 @@
             text-align: right;
         }
         
+        /* Model loader section */
+        .model-loader {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 8px;
+            min-height: 42px;
+        }
+        
+        .model-loader label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+        }
+        
+        .model-name {
+            font-size: 12px;
+            color: #50FF50;
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .model-name.empty {
+            color: #444;
+            font-style: italic;
+        }
+        
+        .load-btn {
+            padding: 6px 14px;
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            color: #000;
+            background: #50FF50;
+            border: none;
+            border-radius: 4px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+        }
+        
+        .load-btn:active {
+            transform: scale(0.98);
+        }
+        
+        #file-input {
+            display: none;
+        }
+        
         /* Right side vertical controls container */
         .right-controls {
             position: absolute;
@@ -247,9 +303,9 @@
                 <div class="vertical-control" id="speed-control">
                     <label>SPEED</label>
                     <div class="vertical-slider-wrap">
-                        <input type="range" class="vertical" id="speed-slider" min="0" max="3" step="0.1" value="1">
+                        <input type="range" class="vertical" id="speed-slider" min="0" max="1" step="0.1" value="0.5">
                     </div>
-                    <span class="value" id="speed-value">1.0x</span>
+                    <span class="value" id="speed-value">0.5x</span>
                 </div>
             </div>
         </div>
@@ -279,9 +335,15 @@
                 </div>
             </div>
         </div>
+        
+        <div class="model-loader">
+            <label>Model</label>
+            <span class="model-name empty" id="model-name">No model loaded</span>
+            <input type="file" id="file-input" accept=".js">
+            <button class="load-btn" id="load-btn">Load .js</button>
+        </div>
     </div>
 
-    <script src="Porsche_911_GT2.js"></script>
     <script src="index.js"></script>
 </body>
 </html>
