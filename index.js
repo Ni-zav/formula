@@ -409,7 +409,7 @@ function frame() {
         transformAllVertices(angle, CAMERA.distance);
         
         ctx.strokeStyle = FOREGROUND;
-        ctx.lineWidth = 1;
+        ctx.lineWidth = 0.3;
         ctx.beginPath();
         
         const edgeCount = edges.length;
