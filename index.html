@@ -1,5 +1,287 @@
-<canvas id="game"></canvas>
-<!-- <script src="penger.js"></script> -->
-<script src="Porsche_911_GT2.js"></script>
-<!-- <script src="cube.js"></script> -->
-<script src="index.js"></script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Viewer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        html, body {
+            overflow: hidden;
+        }
+        
+        body {
+            background: #0a0a0a;
+            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start;
+            padding: 20px 0;
+            height: 100vh;
+            color: #fff;
+        }
+        
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            transform: scale(0.7);
+            transform-origin: top center;
+        }
+        
+        .viewer-area {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        canvas {
+            border: 1px solid #222;
+            border-radius: 4px;
+        }
+        
+        
+        .controls {
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            padding: 12px 20px;
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 8px;
+        }
+        
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        label {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #666;
+        }
+        
+        /* Toggle Switch */
+        .toggle {
+            position: relative;
+            display: flex;
+            background: #222;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        
+        .toggle input {
+            display: none;
+        }
+        
+        .toggle-btn {
+            padding: 6px 12px;
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            color: #555;
+            transition: all 0.2s;
+            border: none;
+            background: transparent;
+        }
+        
+        .toggle-btn.active {
+            background: #50FF50;
+            color: #000;
+        }
+        
+        .toggle-btn:hover:not(.active) {
+            color: #888;
+        }
+        
+        /* Horizontal Slider */
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 120px;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            outline: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            background: #50FF50;
+            border-radius: 50%;
+            cursor: pointer;
+            transition: transform 0.1s;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+        
+        input[type="range"]::-moz-range-thumb {
+            width: 14px;
+            height: 14px;
+            background: #50FF50;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+        
+        .value {
+            font-size: 12px;
+            color: #50FF50;
+            min-width: 48px;
+            text-align: right;
+        }
+        
+        /* Right side vertical controls container */
+        .right-controls {
+            position: absolute;
+            right: -44px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        /* Vertical slider control (pitch, speed) */
+        .vertical-control {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 4px;
+            background: #151515;
+            border: 1px solid #222;
+            border-radius: 6px;
+            width: 32px;
+            cursor: ns-resize;
+        }
+        
+        .vertical-control label {
+            font-size: 8px;
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            transform: rotate(180deg);
+            letter-spacing: 1px;
+        }
+        
+        .vertical-control .value {
+            min-width: auto;
+            text-align: center;
+            font-size: 9px;
+            writing-mode: vertical-rl;
+            transform: rotate(180deg);
+        }
+        
+        .vertical-slider-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 200px;
+        }
+        
+        input[type="range"].vertical {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 180px;
+            height: 3px;
+            background: #333;
+            border-radius: 2px;
+            transform: rotate(-90deg);
+            transform-origin: center center;
+        }
+        
+        input[type="range"].vertical::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 12px;
+            height: 12px;
+            background: #50FF50;
+            border-radius: 50%;
+            cursor: pointer;
+        }
+        
+        input[type="range"].vertical::-moz-range-thumb {
+            width: 12px;
+            height: 12px;
+            background: #50FF50;
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="viewer-area">
+            <canvas id="game"></canvas>
+            
+            <div class="right-controls">
+                <div class="vertical-control" id="pitch-control">
+                    <label>PITCH</label>
+                    <div class="vertical-slider-wrap">
+                        <input type="range" class="vertical" id="pitch-slider" min="-90" max="90" value="20">
+                    </div>
+                    <span class="value" id="pitch-value">20°</span>
+                </div>
+                
+                <div class="vertical-control" id="speed-control">
+                    <label>SPEED</label>
+                    <div class="vertical-slider-wrap">
+                        <input type="range" class="vertical" id="speed-slider" min="0" max="3" step="0.1" value="1">
+                    </div>
+                    <span class="value" id="speed-value">1.0x</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label>Projection</label>
+                <div class="toggle">
+                    <button class="toggle-btn active" id="btn-perspective">Perspective</button>
+                    <button class="toggle-btn" id="btn-ortho">Ortho</button>
+                </div>
+            </div>
+            
+            <div class="control-group" id="focal-group">
+                <label>Focal</label>
+                <div class="slider-container">
+                    <input type="range" id="focal-slider" min="8" max="200" value="35">
+                    <span class="value" id="focal-value">35mm</span>
+                </div>
+            </div>
+            
+            <div class="control-group" id="zoom-group">
+                <label>Zoom</label>
+                <div class="slider-container">
+                    <input type="range" id="zoom-slider" min="0.2" max="3" step="0.1" value="1">
+                    <span class="value" id="zoom-value">1.0x</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="Porsche_911_GT2.js"></script>
+    <script src="index.js"></script>
+</body>
+</html>
