@@ -1,0 +1,5 @@
+*.obj
+*.glb
+*.gltf
+*.dae
+*.fbx

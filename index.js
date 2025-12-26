@@ -18,15 +18,6 @@ function point({x, y}) {
     ctx.fillRect(x - s/2, y - s/2, s, s)
 }
 
-function line(p1, p2) {
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = FOREGROUND
-    ctx.beginPath();
-    ctx.moveTo(p1.x, p1.y);
-    ctx.lineTo(p2.x, p2.y);
-    ctx.stroke();
-}
-
 function screen(p) {
     // -1..1 => 0..2 => 0..1 => 0..w
     return {
@@ -41,9 +32,6 @@ function project({x, y, z}) {
         y: y/z,
     }
 }
-
-const FPS = 60;
-
 
 function translate_z({x, y, z}, dz) {
     return {x, y, z: z + dz};
@@ -61,23 +49,47 @@ function rotate_xz({x, y, z}, angle) {
 
 let dz = 1;
 let angle = 0;
+let lastTime = performance.now();
+let frameCount = 0;
+let fps = 0;
 
 function frame() {
-    const dt = 1/FPS;
-    // dz += 1*dt;
-    angle += Math.PI*dt;
-    clear()
-    // for (const v of vs) {
-    //     point(screen(project(translate_z(rotate_xz(v, angle), dz))))
-    // }
+    // FPS calculation
+    frameCount++;
+    const now = performance.now();
+    if (now - lastTime >= 1000) {
+        fps = frameCount;
+        frameCount = 0;
+        lastTime = now;
+    }
+    
+    angle += Math.PI / 60; // Fixed rotation speed
+    clear();
+    
+    // Batch all lines into a single path for performance
+    ctx.strokeStyle = FOREGROUND;
+    ctx.lineWidth = 1; // Thinner lines for dense models
+    ctx.beginPath();
+    
     for (const f of fs) {
         for (let i = 0; i < f.length; ++i) {
             const a = vs[f[i]];
             const b = vs[f[(i+1)%f.length]];
-            line(screen(project(translate_z(rotate_xz(a, angle), dz))),
-                 screen(project(translate_z(rotate_xz(b, angle), dz))))
+            const p1 = screen(project(translate_z(rotate_xz(a, angle), dz)));
+            const p2 = screen(project(translate_z(rotate_xz(b, angle), dz)));
+            ctx.moveTo(p1.x, p1.y);
+            ctx.lineTo(p2.x, p2.y);
         }
     }
-    setTimeout(frame, 1000/FPS);
+    
+    ctx.stroke(); // Single stroke call for all lines!
+    
+    // Draw FPS counter
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = "16px monospace";
+    ctx.fillText(`FPS: ${fps} | Vertices: ${vs.length} | Faces: ${fs.length}`, 10, 20);
+    
+    requestAnimationFrame(frame);
 }
-setTimeout(frame, 1000/FPS);
+
+requestAnimationFrame(frame);
