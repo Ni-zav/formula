@@ -229,7 +229,35 @@
             transform: scale(0.98);
         }
         
-        #file-input {
+        .load-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .load-btn.processing {
+            position: relative;
+            color: transparent;
+        }
+        
+        .load-btn.processing::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 12px;
+            height: 12px;
+            margin: -6px 0 0 -6px;
+            border: 2px solid #000;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 0.8s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        #file-input, #convert-file-input {
             display: none;
         }
         
@@ -366,6 +394,12 @@
             <span class="model-name empty" id="model-name">No model loaded</span>
             <input type="file" id="file-input" accept=".js">
             <button class="load-btn" id="load-btn">Load .js</button>
+        </div>
+        
+        <div class="model-loader">
+            <label>Convert</label>
+            <input type="file" id="convert-file-input" accept=".obj,.glb,.gltf,.dae,.fbx">
+            <button class="load-btn" id="convert-btn">Convert 3D</button>
         </div>
     </div>
 
