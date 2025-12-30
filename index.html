@@ -340,6 +340,65 @@
             cursor: pointer;
             border: none;
         }
+        
+        /* Z-Culling Toggle Styles */
+        .z-culling-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+        }
+        
+        .z-culling-box label {
+            font-size: 10px;
+            color: #555;
+        }
+        
+        .z-culling-toggle {
+            padding: 5px 10px;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            color: #555;
+            background: #222;
+            border: 1px solid #333;
+            border-radius: 4px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .z-culling-toggle:hover {
+            border-color: #444;
+            color: #777;
+        }
+        
+        .z-culling-toggle.active {
+            background: #50FF50;
+            color: #000;
+            border-color: #50FF50;
+        }
+        
+        .z-culling-mode {
+            padding: 5px 10px;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            color: #50FF50;
+            background: transparent;
+            border: 1px solid #50FF50;
+            border-radius: 4px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .z-culling-mode:hover {
+            background: rgba(80, 255, 80, 0.1);
+        }
     </style>
 </head>
 <body>
@@ -386,6 +445,18 @@
                 <label>ZOOM</label>
                 <input type="range" id="zoom-slider" min="0.2" max="3" step="0.1" value="1">
                 <span class="value" id="zoom-value">1.0x</span>
+            </div>
+            
+            <div class="z-culling-box">
+                <label>RENDER</label>
+                <button class="z-culling-toggle" id="render-mode-toggle">Wire</button>
+                <button class="z-culling-mode" id="show-edges-toggle">Edges</button>
+                <button class="z-culling-mode" id="solid-type-toggle">Opaque</button>
+            </div>
+            
+            <div class="z-culling-box">
+                <label>Z-CULL</label>
+                <button class="z-culling-toggle" id="z-culling-toggle">Off</button>
             </div>
         </div>
         

@@ -1,5 +1,7 @@
 const BACKGROUND = "#101010";
 const FOREGROUND = "#50FF50";
+const FACE_COLOR = "#0a2a0a"; // Solid face fill color (dark green for consistency)
+const FACE_ALPHA = 0.3;       // Opacity for transparent solid mode (0-1)
 
 // ============================================
 // CAMERA SETTINGS (can be modified via UI)
@@ -30,6 +32,18 @@ const CAMERA = {
     
     // Camera distance from origin
     distance: 1.0,
+    
+    // Render mode settings
+    render: {
+        mode: 'wireframe',     // 'wireframe' or 'solid'
+        solidType: 'opaque',   // 'transparent' (stacking) or 'opaque' (depth-sorted)
+        showEdges: true        // Show wireframe edges on solid mode
+    },
+    
+    // Z-Depth Culling settings (for wireframe mode)
+    zCulling: {
+        enabled: false
+    }
 };
 
 // ============================================
@@ -51,6 +65,10 @@ const loadBtn = document.getElementById('load-btn');
 const modelNameEl = document.getElementById('model-name');
 const convertBtn = document.getElementById('convert-btn');
 const convertFileInput = document.getElementById('convert-file-input');
+const zCullingToggle = document.getElementById('z-culling-toggle');
+const renderModeToggle = document.getElementById('render-mode-toggle');
+const showEdgesToggle = document.getElementById('show-edges-toggle');
+const solidTypeToggle = document.getElementById('solid-type-toggle');
 
 // Control containers for scroll support
 const zoomBox = document.getElementById('zoom-box');
@@ -645,6 +663,70 @@ speedSlider.addEventListener('input', (e) => {
 });
 
 // ============================================
+// Z-Depth Culling Controls (for wireframe mode)
+// ============================================
+if (zCullingToggle) {
+    zCullingToggle.addEventListener('click', () => {
+        CAMERA.zCulling.enabled = !CAMERA.zCulling.enabled;
+        zCullingToggle.classList.toggle('active', CAMERA.zCulling.enabled);
+        zCullingToggle.textContent = CAMERA.zCulling.enabled ? 'On' : 'Off';
+    });
+}
+
+// ============================================
+// Render Mode Controls (Wireframe / Solid)
+// ============================================
+function updateRenderModeUI() {
+    const isSolid = CAMERA.render.mode === 'solid';
+    
+    if (renderModeToggle) {
+        renderModeToggle.textContent = isSolid ? 'Solid' : 'Wire';
+        renderModeToggle.classList.toggle('active', isSolid);
+    }
+    
+    if (showEdgesToggle) {
+        showEdgesToggle.style.display = isSolid ? 'inline-block' : 'none';
+        showEdgesToggle.classList.toggle('active', CAMERA.render.showEdges);
+        showEdgesToggle.textContent = CAMERA.render.showEdges ? 'Edges' : 'No Edge';
+    }
+    
+    if (solidTypeToggle) {
+        solidTypeToggle.style.display = isSolid ? 'inline-block' : 'none';
+        const isOpaque = CAMERA.render.solidType === 'opaque';
+        solidTypeToggle.classList.toggle('active', isOpaque);
+        solidTypeToggle.textContent = isOpaque ? 'Opaque' : 'Trans';
+    }
+}
+
+if (renderModeToggle) {
+    renderModeToggle.addEventListener('click', () => {
+        CAMERA.render.mode = CAMERA.render.mode === 'wireframe' ? 'solid' : 'wireframe';
+        updateRenderModeUI();
+    });
+}
+
+if (showEdgesToggle) {
+    showEdgesToggle.addEventListener('click', () => {
+        CAMERA.render.showEdges = !CAMERA.render.showEdges;
+        showEdgesToggle.classList.toggle('active', CAMERA.render.showEdges);
+        showEdgesToggle.textContent = CAMERA.render.showEdges ? 'Edges' : 'No Edge';
+    });
+}
+
+if (solidTypeToggle) {
+    solidTypeToggle.addEventListener('click', () => {
+        CAMERA.render.solidType = CAMERA.render.solidType === 'opaque' ? 'transparent' : 'opaque';
+        const isOpaque = CAMERA.render.solidType === 'opaque';
+        solidTypeToggle.classList.toggle('active', isOpaque);
+        solidTypeToggle.textContent = isOpaque ? 'Opaque' : 'Trans';
+    });
+}
+
+// Initialize render mode UI
+updateRenderModeUI();
+
+
+// ============================================
 // Initialize sliders to match CAMERA defaults
 // ============================================
 function initSliders() {
@@ -690,7 +772,20 @@ let vsFlat = null;
 let edges = [];
 let transformedX = null;
 let transformedY = null;
+let transformedZ = null; // Z-depth buffer for culling
 let modelLoaded = false;
+
+// Optimized z-culling data structures (pre-allocated)
+let faceCount = 0;
+let faceIndices = null;      // Flat array of face vertex indices
+let faceOffsets = null;      // Start offset for each face in faceIndices
+let faceLengths = null;      // Number of vertices per face
+let faceNormalsFlat = null;  // Flat array: [nx, ny, nz, nx, ny, nz, ...]
+let faceAvgZ = null;         // Average Z per face (Float32Array)
+let faceVisible = null;      // Visibility flag per face (Uint8Array)
+let faceSortIndices = null;  // Pre-allocated sort indices
+let edgeVisibility = null;   // Pre-allocated edge visibility (Uint8Array)
+let edgeToFaces = null;      // Map edge index -> [faceIndex1, faceIndex2, ...]
 
 // Global model data (will be populated when a model is loaded)
 let vs = null;
@@ -714,17 +809,22 @@ function initModel() {
         vsFlat[i * 3 + 2] = vs[i].z;
     }
     
-    // Build unique edge list
-    const edgeSet = new Set();
+    // Build unique edge list with integer keys for fast lookup
+    const edgeMap = new Map(); // key -> edge index
     edges = [];
+    
+    function getEdgeKey(a, b) {
+        // Create unique integer key for edge (works for up to ~65k vertices)
+        return a < b ? (a * 65536 + b) : (b * 65536 + a);
+    }
     
     for (const f of fs) {
         for (let i = 0; i < f.length; ++i) {
             const a = f[i];
             const b = f[(i + 1) % f.length];
-            const key = a < b ? `${a}-${b}` : `${b}-${a}`;
-            if (!edgeSet.has(key)) {
-                edgeSet.add(key);
+            const key = getEdgeKey(a, b);
+            if (!edgeMap.has(key)) {
+                edgeMap.set(key, edges.length);
                 edges.push([a, b]);
             }
         }
@@ -733,9 +833,96 @@ function initModel() {
     // Pre-allocated transformation buffers
     transformedX = new Float32Array(vertexCount);
     transformedY = new Float32Array(vertexCount);
+    transformedZ = new Float32Array(vertexCount);
+    
+    // Count valid faces and total indices
+    faceCount = 0;
+    let totalFaceIndices = 0;
+    for (let i = 0; i < fs.length; i++) {
+        if (fs[i].length >= 3) {
+            faceCount++;
+            totalFaceIndices += fs[i].length;
+        }
+    }
+    
+    // Pre-allocate face data as flat typed arrays
+    faceIndices = new Uint32Array(totalFaceIndices);
+    faceOffsets = new Uint32Array(faceCount);
+    faceLengths = new Uint8Array(faceCount);
+    faceNormalsFlat = new Float32Array(faceCount * 3);
+    faceAvgZ = new Float32Array(faceCount);
+    faceVisible = new Uint8Array(faceCount);
+    faceSortIndices = new Uint32Array(faceCount);
+    edgeVisibility = new Uint8Array(edges.length);
+    
+    // Build edge-to-faces mapping (which faces share each edge)
+    edgeToFaces = new Array(edges.length);
+    for (let i = 0; i < edges.length; i++) {
+        edgeToFaces[i] = [];
+    }
+    
+    let faceIdx = 0;
+    let indexOffset = 0;
+    
+    for (let i = 0; i < fs.length; i++) {
+        const f = fs[i];
+        if (f.length < 3) continue;
+        
+        // Store face indices
+        faceOffsets[faceIdx] = indexOffset;
+        faceLengths[faceIdx] = f.length;
+        for (let j = 0; j < f.length; j++) {
+            faceIndices[indexOffset + j] = f[j];
+        }
+        
+        // Map edges to this face
+        for (let j = 0; j < f.length; j++) {
+            const a = f[j];
+            const b = f[(j + 1) % f.length];
+            const key = getEdgeKey(a, b);
+            const edgeIdx = edgeMap.get(key);
+            if (edgeIdx !== undefined) {
+                edgeToFaces[edgeIdx].push(faceIdx);
+            }
+        }
+        
+        // Compute face normal using first 3 vertices
+        const v0 = vs[f[0]];
+        const v1 = vs[f[1]];
+        const v2 = vs[f[2]];
+        
+        // Edge vectors
+        const ax = v1.x - v0.x, ay = v1.y - v0.y, az = v1.z - v0.z;
+        const bx = v2.x - v0.x, by = v2.y - v0.y, bz = v2.z - v0.z;
+        
+        // Cross product for normal
+        let nx = ay * bz - az * by;
+        let ny = az * bx - ax * bz;
+        let nz = ax * by - ay * bx;
+        
+        // Normalize
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 0) {
+            nx /= len;
+            ny /= len;
+            nz /= len;
+        } else {
+            nx = 0; ny = 0; nz = 1;
+        }
+        
+        faceNormalsFlat[faceIdx * 3] = nx;
+        faceNormalsFlat[faceIdx * 3 + 1] = ny;
+        faceNormalsFlat[faceIdx * 3 + 2] = nz;
+        
+        // Initialize sort indices
+        faceSortIndices[faceIdx] = faceIdx;
+        
+        indexOffset += f.length;
+        faceIdx++;
+    }
     
     modelLoaded = true;
-    console.log(`Loaded: ${vertexCount} vertices, ${edges.length} unique edges`);
+    console.log(`Loaded: ${vertexCount} vertices, ${edges.length} edges, ${faceCount} faces`);
 }
 
 // ============================================
@@ -861,6 +1048,9 @@ function transformAllVertices(angle, dz) {
         // Translate Z
         const tz = rz2 + dz;
         
+        // Store the transformed Z for culling calculations
+        transformedZ[i] = tz;
+        
         let px, py;
         
         if (isPerspective) {
@@ -877,12 +1067,40 @@ function transformAllVertices(angle, dz) {
         transformedX[i] = px * halfWidth + halfWidth;
         transformedY[i] = -py * halfHeight + halfHeight;
     }
+    
+    // Store rotation values for screen-space backface culling (calculated during render)
+    // This avoids the expensive per-face normal transformation
 }
 
 let angle = 0;
 let lastTime = performance.now();
 let frameCount = 0;
 let fps = 0;
+
+// Helper: Check if a face is front-facing using screen-space signed area
+// Uses the cross product of two edges
+// In Canvas2D, Y increases downward, so negative signed area = front-facing
+function isFaceFrontFacing(faceIdx) {
+    const offset = faceOffsets[faceIdx];
+    const len = faceLengths[faceIdx];
+    if (len < 3) return true;
+    
+    // Get first 3 vertices
+    const v0 = faceIndices[offset];
+    const v1 = faceIndices[offset + 1];
+    const v2 = faceIndices[offset + 2];
+    
+    // Screen-space coordinates
+    const x0 = transformedX[v0], y0 = transformedY[v0];
+    const x1 = transformedX[v1], y1 = transformedY[v1];
+    const x2 = transformedX[v2], y2 = transformedY[v2];
+    
+    // Signed area (2D cross product)
+    // In Canvas2D with Y-down, negative = front-facing (CCW in world becomes CW on screen)
+    const signedArea = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    
+    return signedArea < 0;
+}
 
 function frame() {
     frameCount++;
@@ -900,18 +1118,204 @@ function frame() {
     if (modelLoaded && vertexCount > 0) {
         transformAllVertices(angle, CAMERA.distance);
         
-        ctx.strokeStyle = FOREGROUND;
-        ctx.lineWidth = 0.3;
-        ctx.beginPath();
-        
-        const edgeCount = edges.length;
-        for (let i = 0; i < edgeCount; i++) {
-            const edge = edges[i];
-            ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
-            ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+        if (CAMERA.render.mode === 'solid' && faceCount > 0) {
+            // SOLID MODE: Draw filled faces
+            const useZCull = CAMERA.zCulling.enabled;
+            const isTransparent = CAMERA.render.solidType === 'transparent';
+            
+            ctx.strokeStyle = FOREGROUND;
+            ctx.lineWidth = 0.3;
+            
+            if (isTransparent) {
+                // TRANSPARENT MODE: Semi-transparent faces that stack
+                ctx.globalAlpha = FACE_ALPHA;
+                ctx.fillStyle = FOREGROUND; // Use green for visibility
+                
+                for (let i = 0; i < faceCount; i++) {
+                    if (useZCull && !isFaceFrontFacing(i)) continue;
+                    
+                    const offset = faceOffsets[i];
+                    const len = faceLengths[i];
+                    
+                    ctx.beginPath();
+                    const firstVert = faceIndices[offset];
+                    ctx.moveTo(transformedX[firstVert], transformedY[firstVert]);
+                    for (let j = 1; j < len; j++) {
+                        const vert = faceIndices[offset + j];
+                        ctx.lineTo(transformedX[vert], transformedY[vert]);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                
+                ctx.globalAlpha = 1.0; // Reset alpha
+            } else {
+                // OPAQUE MODE: Draw solid faces with proper hidden line removal
+                // Each face draws fill + stroke together so front faces cover back edges
+                ctx.fillStyle = FACE_COLOR;
+                ctx.strokeStyle = FOREGROUND;
+                ctx.lineWidth = 0.3;
+                
+                const showEdges = CAMERA.render.showEdges;
+                
+                if (useZCull) {
+                    // Z-CULL ON: Draw front-facing faces with depth sorting
+                    const visibleFaces = [];
+                    
+                    for (let i = 0; i < faceCount; i++) {
+                        if (!isFaceFrontFacing(i)) continue;
+                        
+                        const offset = faceOffsets[i];
+                        const len = faceLengths[i];
+                        
+                        // Calculate average Z
+                        let avgZ = 0;
+                        for (let j = 0; j < len; j++) {
+                            avgZ += transformedZ[faceIndices[offset + j]];
+                        }
+                        avgZ /= len;
+                        
+                        visibleFaces.push({ idx: i, avgZ: avgZ });
+                    }
+                    
+                    // Sort back-to-front
+                    visibleFaces.sort((a, b) => b.avgZ - a.avgZ);
+                    
+                    // Draw faces with fill+stroke together (so front faces cover back edges)
+                    for (const face of visibleFaces) {
+                        const i = face.idx;
+                        const offset = faceOffsets[i];
+                        const len = faceLengths[i];
+                        
+                        ctx.beginPath();
+                        const firstVert = faceIndices[offset];
+                        ctx.moveTo(transformedX[firstVert], transformedY[firstVert]);
+                        for (let j = 1; j < len; j++) {
+                            const vert = faceIndices[offset + j];
+                            ctx.lineTo(transformedX[vert], transformedY[vert]);
+                        }
+                        ctx.closePath();
+                        ctx.fill();
+                        if (showEdges) ctx.stroke();
+                    }
+                } else {
+                    // Z-CULL OFF: Draw all faces with depth sorting
+                    const visibleFaces = [];
+                    
+                    for (let i = 0; i < faceCount; i++) {
+                        const offset = faceOffsets[i];
+                        const len = faceLengths[i];
+                        
+                        // Calculate average Z
+                        let avgZ = 0;
+                        for (let j = 0; j < len; j++) {
+                            avgZ += transformedZ[faceIndices[offset + j]];
+                        }
+                        avgZ /= len;
+                        
+                        visibleFaces.push({ idx: i, avgZ: avgZ });
+                    }
+                    
+                    // Sort back-to-front
+                    visibleFaces.sort((a, b) => b.avgZ - a.avgZ);
+                    
+                    // Draw faces with fill+stroke together
+                    for (const face of visibleFaces) {
+                        const i = face.idx;
+                        const offset = faceOffsets[i];
+                        const len = faceLengths[i];
+                        
+                        ctx.beginPath();
+                        const firstVert = faceIndices[offset];
+                        ctx.moveTo(transformedX[firstVert], transformedY[firstVert]);
+                        for (let j = 1; j < len; j++) {
+                            const vert = faceIndices[offset + j];
+                            ctx.lineTo(transformedX[vert], transformedY[vert]);
+                        }
+                        ctx.closePath();
+                        ctx.fill();
+                        if (showEdges) ctx.stroke();
+                    }
+                }
+            }
+            
+            // Draw edges for TRANSPARENT mode only (opaque mode draws edges per-face above)
+            if (isTransparent && CAMERA.render.showEdges) {
+                ctx.beginPath();
+                
+                if (useZCull) {
+                    // Draw edges of front-facing faces only
+                    const edgeLen = edges.length;
+                    for (let i = 0; i < edgeLen; i++) {
+                        const adjacentFaces = edgeToFaces[i];
+                        let edgeVisible = false;
+                        
+                        for (let j = 0; j < adjacentFaces.length; j++) {
+                            if (isFaceFrontFacing(adjacentFaces[j])) {
+                                edgeVisible = true;
+                                break;
+                            }
+                        }
+                        
+                        if (edgeVisible) {
+                            const edge = edges[i];
+                            ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
+                            ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                        }
+                    }
+                } else {
+                    // Draw all edges
+                    const edgeLen = edges.length;
+                    for (let i = 0; i < edgeLen; i++) {
+                        const edge = edges[i];
+                        ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
+                        ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                    }
+                }
+                
+                ctx.stroke();
+            }
+        } else if (CAMERA.zCulling.enabled && faceCount > 0) {
+            // WIREFRAME MODE with Z-Culling
+            ctx.strokeStyle = FOREGROUND;
+            ctx.lineWidth = 0.3;
+            ctx.beginPath();
+            
+            const edgeLen = edges.length;
+            for (let i = 0; i < edgeLen; i++) {
+                const adjacentFaces = edgeToFaces[i];
+                let edgeVisible = false;
+                
+                for (let j = 0; j < adjacentFaces.length; j++) {
+                    if (isFaceFrontFacing(adjacentFaces[j])) {
+                        edgeVisible = true;
+                        break;
+                    }
+                }
+                
+                if (edgeVisible) {
+                    const edge = edges[i];
+                    ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
+                    ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                }
+            }
+            
+            ctx.stroke();
+        } else {
+            // WIREFRAME MODE without Z-Culling
+            ctx.strokeStyle = FOREGROUND;
+            ctx.lineWidth = 0.3;
+            ctx.beginPath();
+            
+            const edgeLen = edges.length;
+            for (let i = 0; i < edgeLen; i++) {
+                const edge = edges[i];
+                ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
+                ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+            }
+            
+            ctx.stroke();
         }
-        
-        ctx.stroke();
     } else {
         // Show placeholder text when no model is loaded
         ctx.fillStyle = "#333";
@@ -928,6 +1332,11 @@ function frame() {
     ctx.fillStyle = "#666";
     ctx.font = "12px monospace";
     ctx.fillText(`${fps} FPS`, 10, 20);
+    if (CAMERA.render.mode === 'solid') {
+        ctx.fillText(`Solid${CAMERA.render.showEdges ? ' + Edges' : ''}`, 10, 36);
+    } else if (CAMERA.zCulling.enabled) {
+        ctx.fillText(`Z-Culling: ON`, 10, 36);
+    }
     
     requestAnimationFrame(frame);
 }
