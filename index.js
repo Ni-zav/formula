@@ -66,6 +66,8 @@ const pitchSlider = document.getElementById('pitch-slider');
 const pitchValue = document.getElementById('pitch-value');
 const speedSlider = document.getElementById('speed-slider');
 const speedValue = document.getElementById('speed-value');
+const rotationSlider = document.getElementById('rotation-slider');
+const rotationValue = document.getElementById('rotation-value');
 const fileInput = document.getElementById('file-input');
 const loadBtn = document.getElementById('load-btn');
 const modelNameEl = document.getElementById('model-name');
@@ -84,6 +86,7 @@ const solidTypeToggle = document.getElementById('solid-type-toggle');
 const zoomBox = document.getElementById('zoom-box');
 const pitchControl = document.getElementById('pitch-control');
 const speedControl = document.getElementById('speed-control');
+const rotationControl = document.getElementById('rotation-control');
 
 // ============================================
 // 3D Model Converter (Browser-based)
@@ -604,8 +607,45 @@ addScrollSupport(zoomBox, zoomSlider, zoomValue, v => `${v.toFixed(1)}x`, v => {
     if (CAMERA.type === 'perspective') CAMERA.perspectiveZoom = v;
     else CAMERA.orthoZoom = v;
 });
-addScrollSupport(pitchControl, pitchSlider, pitchValue, v => `${Math.round(v)}°`, v => CAMERA.pitch = Math.round(v));
 addScrollSupport(speedControl, speedSlider, speedValue, v => `${v.toFixed(1)}x`, v => CAMERA.rotationSpeed = v);
+
+// Pitch scroll support with wrapping (0-360)
+pitchControl.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const step = 5; // 5 degree steps
+    let val = parseFloat(pitchSlider.value);
+    
+    val += e.deltaY < 0 ? step : -step;
+    // Wrap around 0-360
+    if (val >= 360) val -= 360;
+    if (val < 0) val += 360;
+    
+    pitchSlider.value = val;
+    pitchValue.textContent = `${Math.round(val)}°`;
+    CAMERA.pitch = Math.round(val);
+}, { passive: false });
+
+// Rotation scroll support with wrapping
+rotationControl.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const step = 5; // 5 degree steps
+    let val = parseFloat(rotationSlider.value);
+    
+    val += e.deltaY < 0 ? step : -step;
+    // Wrap around 0-360
+    if (val >= 360) val -= 360;
+    if (val < 0) val += 360;
+    
+    rotationSlider.value = val;
+    rotationValue.textContent = `${Math.round(val)}°`;
+    // Update the actual angle (convert degrees to radians)
+    angle = val * Math.PI / 180;
+}, { passive: false });
+addScrollSupport(depthThresholdBox, depthThresholdSlider, depthThresholdValue, v => `${v.toFixed(1)}`, v => CAMERA.depthCull.threshold = v);
 
 let savedSpeed = 0.5;
 
@@ -660,9 +700,14 @@ zoomSlider.addEventListener('input', (e) => {
     zoomValue.textContent = `${value.toFixed(1)}x`;
 });
 
-// Pitch slider
+// Pitch slider with wrapping (0-360)
 pitchSlider.addEventListener('input', (e) => {
-    CAMERA.pitch = parseInt(e.target.value);
+    let val = parseFloat(e.target.value);
+    // Wrap around 0-360
+    if (val >= 360) val = 0;
+    if (val < 0) val = 360 + val;
+    pitchSlider.value = val;
+    CAMERA.pitch = Math.round(val);
     pitchValue.textContent = `${CAMERA.pitch}°`;
 });
 
@@ -670,6 +715,18 @@ pitchSlider.addEventListener('input', (e) => {
 speedSlider.addEventListener('input', (e) => {
     CAMERA.rotationSpeed = parseFloat(e.target.value);
     speedValue.textContent = `${CAMERA.rotationSpeed.toFixed(1)}x`;
+});
+
+// Rotation slider
+rotationSlider.addEventListener('input', (e) => {
+    let val = parseFloat(e.target.value);
+    // Wrap around 0-360
+    if (val >= 360) val = 0;
+    if (val < 0) val = 360 + val;
+    rotationSlider.value = val;
+    rotationValue.textContent = `${Math.round(val)}°`;
+    // Update the actual angle (convert degrees to radians)
+    angle = val * Math.PI / 180;
 });
 
 // ============================================
@@ -777,6 +834,10 @@ function initSliders() {
     // Speed slider
     speedSlider.value = CAMERA.rotationSpeed;
     speedValue.textContent = `${CAMERA.rotationSpeed.toFixed(1)}x`;
+    
+    // Rotation slider (starts at 0)
+    rotationSlider.value = 0;
+    rotationValue.textContent = `0°`;
 }
 
 // Initialize sliders on load
@@ -1174,6 +1235,18 @@ function frame() {
     }
     
     angle += (Math.PI / 60) * CAMERA.rotationSpeed;
+    
+    // Wrap angle to 0-2*PI range
+    if (angle >= 2 * Math.PI) angle -= 2 * Math.PI;
+    if (angle < 0) angle += 2 * Math.PI;
+    
+    // Update rotation slider to follow animation (when speed > 0)
+    if (CAMERA.rotationSpeed !== 0) {
+        const angleDeg = Math.round(angle * 180 / Math.PI);
+        rotationSlider.value = angleDeg;
+        rotationValue.textContent = `${angleDeg}°`;
+    }
+    
     clear();
     
     // Only render if model is loaded

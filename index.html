@@ -272,6 +272,17 @@
             gap: 8px;
         }
         
+        /* Left side controls container */
+        .left-controls {
+            position: absolute;
+            left: -44px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
 
         
         /* Vertical slider control (pitch, speed) */
@@ -404,6 +415,17 @@
 <body>
     <div class="container">
         <div class="viewer-area">
+            <!-- Left side: Rotation angle control -->
+            <div class="left-controls">
+                <div class="vertical-control" id="rotation-control">
+                    <label>ROTATE</label>
+                    <div class="vertical-slider-wrap">
+                        <input type="range" class="vertical" id="rotation-slider" min="0" max="360" value="0">
+                    </div>
+                    <span class="value" id="rotation-value">0°</span>
+                </div>
+            </div>
+            
             <canvas id="game"></canvas>
             
             <!-- Right side: Animation controls (Pitch/Speed) -->
@@ -411,7 +433,7 @@
                 <div class="vertical-control" id="pitch-control">
                     <label>PITCH</label>
                     <div class="vertical-slider-wrap">
-                        <input type="range" class="vertical" id="pitch-slider" min="-90" max="90" value="20">
+                        <input type="range" class="vertical" id="pitch-slider" min="0" max="360" value="20">
                     </div>
                     <span class="value" id="pitch-value">20°</span>
                 </div>
