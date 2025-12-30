@@ -1583,7 +1583,7 @@ function frame() {
                 // with proper per-pixel Z interpolation via barycentric coordinates
                 if (showSilhouette) {
                     // Optimized grid resolution - 400 is sufficient for silhouette precision
-                    const GRID_RES = 400;
+                    const GRID_RES = 800;
                     const depthGrid = new Float32Array(GRID_RES * GRID_RES);
                     depthGrid.fill(Infinity);
                     
