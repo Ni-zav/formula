@@ -1578,9 +1578,54 @@ function frame() {
                     if (showEdges) ctx.stroke();
                 }
                 
-                // Draw silhouettes with per-edge occlusion testing
-                // Check against ALL front-facing faces, not just rendered ones
+                // Draw silhouettes with depth-map based occlusion
+                // Build a low-res depth grid from ALL front-facing faces
+                // Silhouettes are visible when they're at or near the front visible surface
                 if (showSilhouette) {
+                    // Build depth grid (minimum Z at each cell)
+                    const GRID_RES = 40;
+                    const depthGrid = new Float32Array(GRID_RES * GRID_RES);
+                    depthGrid.fill(Infinity);
+                    
+                    const canvasW = game.width;
+                    const canvasH = game.height;
+                    const cellW = canvasW / GRID_RES;
+                    const cellH = canvasH / GRID_RES;
+                    
+                    // Fill depth grid with minimum Z from front-facing faces
+                    for (let f = 0; f < fCount; f++) {
+                        if (!fIsFront[f]) continue;
+                        
+                        // Get face bounding box grid cells
+                        const minCellX = Math.max(0, Math.floor(faceBBoxMinX[f] / cellW));
+                        const maxCellX = Math.min(GRID_RES - 1, Math.floor(faceBBoxMaxX[f] / cellW));
+                        const minCellY = Math.max(0, Math.floor(faceBBoxMinY[f] / cellH));
+                        const maxCellY = Math.min(GRID_RES - 1, Math.floor(faceBBoxMaxY[f] / cellH));
+                        
+                        const faceZ = fAvgZ[f];
+                        
+                        // Update depth grid cells covered by this face
+                        for (let cy = minCellY; cy <= maxCellY; cy++) {
+                            for (let cx = minCellX; cx <= maxCellX; cx++) {
+                                const idx = cy * GRID_RES + cx;
+                                if (faceZ < depthGrid[idx]) {
+                                    depthGrid[idx] = faceZ;
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Calculate depth range for tolerance
+                    let minZ = Infinity, maxZ = -Infinity;
+                    for (let f = 0; f < fCount; f++) {
+                        if (!fIsFront[f]) continue;
+                        if (fAvgZ[f] < minZ) minZ = fAvgZ[f];
+                        if (fAvgZ[f] > maxZ) maxZ = fAvgZ[f];
+                    }
+                    // Tolerance: edge is visible if within 30% of the depth range from the front
+                    const depthRange = maxZ - minZ;
+                    const depthTolerance = depthRange > 0 ? depthRange * 0.2 : 0.1;
+                    
                     ctx.beginPath();
                     ctx.strokeStyle = FOREGROUND;
                     ctx.lineWidth = 0.6;
@@ -1601,33 +1646,20 @@ function frame() {
                         
                         if (!isSilhouette) continue;
                         
-                        // Compute edge bounding box and Z
+                        // Compute edge center and Z
                         const v0 = edge[0], v1 = edge[1];
+                        const edgeCenterX = (txArr[v0] + txArr[v1]) / 2;
+                        const edgeCenterY = (tyArr[v0] + tyArr[v1]) / 2;
                         const edgeZ = (tzArr[v0] + tzArr[v1]) / 2;
-                        const edgeMinX = Math.min(txArr[v0], txArr[v1]);
-                        const edgeMaxX = Math.max(txArr[v0], txArr[v1]);
-                        const edgeMinY = Math.min(tyArr[v0], tyArr[v1]);
-                        const edgeMaxY = Math.max(tyArr[v0], tyArr[v1]);
                         
-                        // Check if edge is occluded by ANY front-facing face
-                        let isOccluded = false;
+                        // Sample depth grid at edge center
+                        const cellX = Math.max(0, Math.min(GRID_RES - 1, Math.floor(edgeCenterX / cellW)));
+                        const cellY = Math.max(0, Math.min(GRID_RES - 1, Math.floor(edgeCenterY / cellH)));
+                        const gridDepth = depthGrid[cellY * GRID_RES + cellX];
                         
-                        for (let f = 0; f < fCount; f++) {
-                            if (!fIsFront[f]) continue; // Only front-facing faces can occlude
-                            
-                            // Face must be in FRONT of edge (smaller Z = closer to camera)
-                            if (fAvgZ[f] >= edgeZ) continue;
-                            
-                            // Check bounding box overlap
-                            if (faceBBoxMaxX[f] < edgeMinX || faceBBoxMinX[f] > edgeMaxX) continue;
-                            if (faceBBoxMaxY[f] < edgeMinY || faceBBoxMinY[f] > edgeMaxY) continue;
-                            
-                            // Bounding boxes overlap and face is in front - edge is occluded
-                            isOccluded = true;
-                            break;
-                        }
-                        
-                        if (!isOccluded) {
+                        // Edge is visible if it's at or near the front surface (within tolerance)
+                        // Or if there's no geometry at this location (gridDepth is Infinity)
+                        if (gridDepth === Infinity || edgeZ <= gridDepth + depthTolerance) {
                             ctx.moveTo(txArr[v0], tyArr[v0]);
                             ctx.lineTo(txArr[v1], tyArr[v1]);
                         }
