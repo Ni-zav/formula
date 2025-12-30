@@ -1407,8 +1407,9 @@ function frame() {
             
             if (isTransparent) {
                 // TRANSPARENT MODE: Semi-transparent faces that stack
+                // MUST use per-face fill() for proper alpha blending of overlapping faces
                 ctx.globalAlpha = FACE_ALPHA;
-                ctx.fillStyle = FOREGROUND; // Use green for visibility
+                ctx.fillStyle = FOREGROUND;
                 
                 // Cache array references for hot loop
                 const fOffsets = faceOffsets;
@@ -1419,7 +1420,7 @@ function frame() {
                 const fVisible = faceVisible;
                 const fCount = faceCount;
                 
-                // Cache visibility for edge drawing later, then draw each face
+                // Determine visibility and draw each face individually (for proper alpha stacking)
                 for (let i = 0; i < fCount; i++) {
                     // Backface culling: check winding order
                     if (useBackfaceCull && !isFaceFrontFacing(i)) {
@@ -1436,9 +1437,9 @@ function frame() {
                     
                     const offset = fOffsets[i];
                     const len = fLengths[i];
+                    const v0 = fIndices[offset];
                     
                     // Skip tiny faces (< 2x2 pixels)
-                    const v0 = fIndices[offset];
                     let minX = txArr[v0], maxX = minX;
                     let minY = tyArr[v0], maxY = minY;
                     for (let j = 1; j < len; j++) {
@@ -1449,6 +1450,7 @@ function frame() {
                     }
                     if ((maxX - minX) < 2 && (maxY - minY) < 2) continue;
                     
+                    // Draw each face individually so overlapping areas stack alpha
                     ctx.beginPath();
                     ctx.moveTo(txArr[v0], tyArr[v0]);
                     for (let j = 1; j < len; j++) {
@@ -1459,13 +1461,10 @@ function frame() {
                     ctx.fill();
                 }
                 
-                ctx.globalAlpha = 1.0; // Reset alpha
+                ctx.globalAlpha = 1.0;
             } else {
                 // OPAQUE MODE: Draw solid faces with proper depth sorting
-                ctx.fillStyle = FACE_COLOR;
-                ctx.strokeStyle = FOREGROUND;
-                ctx.lineWidth = 0.3;
-                
+                // MUST use per-face rendering to respect depth sort (back-to-front)
                 const showEdges = CAMERA.render.showEdges;
                 
                 // Cache array references for hot loop
@@ -1479,6 +1478,10 @@ function frame() {
                 const fVisible = faceVisible;
                 const fSortIdx = faceSortIndices;
                 const fCount = faceCount;
+                
+                ctx.fillStyle = FACE_COLOR;
+                ctx.strokeStyle = FOREGROUND;
+                ctx.lineWidth = 0.3;
                 
                 // Calculate avgZ and visibility for all faces
                 let visibleCount = 0;
@@ -1515,7 +1518,7 @@ function frame() {
                     quickSortDepth(fSortIdx, fAvgZ, 0, visibleCount - 1);
                 }
                 
-                // Draw faces back-to-front
+                // Draw faces back-to-front (per-face for correct depth ordering)
                 for (let s = 0; s < visibleCount; s++) {
                     const i = fSortIdx[s];
                     const offset = fOffsets[i];
