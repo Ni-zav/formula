@@ -1579,29 +1579,24 @@ function frame() {
                 }
                 
                 // Draw silhouettes with depth-map based occlusion and edge splitting
-                // Build a depth grid from ALL front-facing faces using TRIANGLE RASTERIZATION
-                // This eliminates squared artifacts from bounding-box based approach
+                // Build a depth grid from ALL front-facing faces using SCANLINE RASTERIZATION
+                // with proper per-pixel Z interpolation via barycentric coordinates
                 if (showSilhouette) {
-                    // Build high-res depth grid for better precision
-                    const GRID_RES = 800;
+                    // Optimized grid resolution - 400 is sufficient for silhouette precision
+                    const GRID_RES = 400;
                     const depthGrid = new Float32Array(GRID_RES * GRID_RES);
                     depthGrid.fill(Infinity);
                     
                     const canvasW = game.width;
                     const canvasH = game.height;
-                    const cellW = canvasW / GRID_RES;
-                    const cellH = canvasH / GRID_RES;
+                    const scaleX = GRID_RES / canvasW;
+                    const scaleY = GRID_RES / canvasH;
                     
                     // Track min/max Z for relative tolerance
                     let minFrontZ = Infinity, maxFrontZ = -Infinity;
                     
-                    // Edge function for triangle rasterization
-                    // Returns positive if point (px, py) is on the left side of edge from (x0, y0) to (x1, y1)
-                    function edgeFunc(x0, y0, x1, y1, px, py) {
-                        return (px - x0) * (y1 - y0) - (py - y0) * (x1 - x0);
-                    }
-                    
-                    // Fill depth grid with minimum Z from front-facing faces using triangle rasterization
+                    // Optimized scanline triangle rasterization with Z interpolation
+                    // Uses horizontal scanlines and edge walking for efficiency
                     for (let f = 0; f < fCount; f++) {
                         if (!fIsFront[f]) continue;
                         
@@ -1609,70 +1604,121 @@ function frame() {
                         const len = fLengths[f];
                         if (len < 3) continue;
                         
+                        // Track Z range
                         const faceZ = fAvgZ[f];
                         if (faceZ < minFrontZ) minFrontZ = faceZ;
                         if (faceZ > maxFrontZ) maxFrontZ = faceZ;
                         
-                        // For triangles, use fast edge-function rasterization
-                        // For n-gons, triangulate from first vertex (fan triangulation)
+                        // Fan triangulation for n-gons
                         for (let tri = 0; tri < len - 2; tri++) {
-                            // Triangle vertices: 0, tri+1, tri+2 (fan from vertex 0)
-                            const v0 = fIndices[offset];
-                            const v1 = fIndices[offset + tri + 1];
-                            const v2 = fIndices[offset + tri + 2];
+                            const vi0 = fIndices[offset];
+                            const vi1 = fIndices[offset + tri + 1];
+                            const vi2 = fIndices[offset + tri + 2];
                             
-                            // Screen coordinates of triangle vertices
-                            const x0 = txArr[v0], y0 = tyArr[v0];
-                            const x1 = txArr[v1], y1 = tyArr[v1];
-                            const x2 = txArr[v2], y2 = tyArr[v2];
+                            // Get coordinates in grid space and Z values
+                            let gx0 = txArr[vi0] * scaleX, gy0 = tyArr[vi0] * scaleY, gz0 = tzArr[vi0];
+                            let gx1 = txArr[vi1] * scaleX, gy1 = tyArr[vi1] * scaleY, gz1 = tzArr[vi1];
+                            let gx2 = txArr[vi2] * scaleX, gy2 = tyArr[vi2] * scaleY, gz2 = tzArr[vi2];
                             
-                            // Compute bounding box in grid coordinates
-                            const minGX = Math.max(0, Math.floor(Math.min(x0, x1, x2) / cellW));
-                            const maxGX = Math.min(GRID_RES - 1, Math.floor(Math.max(x0, x1, x2) / cellW));
-                            const minGY = Math.max(0, Math.floor(Math.min(y0, y1, y2) / cellH));
-                            const maxGY = Math.min(GRID_RES - 1, Math.floor(Math.max(y0, y1, y2) / cellH));
+                            // Sort vertices by Y (gy0 <= gy1 <= gy2)
+                            if (gy0 > gy1) { let t = gx0; gx0 = gx1; gx1 = t; t = gy0; gy0 = gy1; gy1 = t; t = gz0; gz0 = gz1; gz1 = t; }
+                            if (gy1 > gy2) { let t = gx1; gx1 = gx2; gx2 = t; t = gy1; gy1 = gy2; gy2 = t; t = gz1; gz1 = gz2; gz2 = t; }
+                            if (gy0 > gy1) { let t = gx0; gx0 = gx1; gx1 = t; t = gy0; gy0 = gy1; gy1 = t; t = gz0; gz0 = gz1; gz1 = t; }
                             
-                            // Skip if bounding box is empty
-                            if (minGX > maxGX || minGY > maxGY) continue;
+                            // Skip degenerate triangles
+                            const totalHeight = gy2 - gy0;
+                            if (totalHeight < 0.001) continue;
                             
-                            // Rasterize triangle using edge functions
-                            // A point is inside if all three edge functions have the same sign
-                            for (let gy = minGY; gy <= maxGY; gy++) {
-                                const py = (gy + 0.5) * cellH; // Center of grid cell
-                                for (let gx = minGX; gx <= maxGX; gx++) {
-                                    const px = (gx + 0.5) * cellW; // Center of grid cell
-                                    
-                                    // Compute edge functions
-                                    const e0 = edgeFunc(x0, y0, x1, y1, px, py);
-                                    const e1 = edgeFunc(x1, y1, x2, y2, px, py);
-                                    const e2 = edgeFunc(x2, y2, x0, y0, px, py);
-                                    
-                                    // Point is inside triangle if all edge functions have same sign (>= 0 or all <= 0)
-                                    // Using >= 0 for CCW winding, but we need to handle both windings
-                                    const inside = (e0 >= 0 && e1 >= 0 && e2 >= 0) || (e0 <= 0 && e1 <= 0 && e2 <= 0);
-                                    
-                                    if (inside) {
-                                        const idx = gy * GRID_RES + gx;
-                                        if (faceZ < depthGrid[idx]) {
-                                            depthGrid[idx] = faceZ;
-                                        }
+                            // Clamp to grid bounds
+                            const minY = Math.max(0, Math.ceil(gy0));
+                            const maxY = Math.min(GRID_RES - 1, Math.floor(gy2));
+                            
+                            // Pre-compute edge slopes
+                            const invTotalHeight = 1.0 / totalHeight;
+                            const topHeight = gy1 - gy0;
+                            const bottomHeight = gy2 - gy1;
+                            const hasTopHalf = topHeight > 0.001;
+                            const hasBottomHalf = bottomHeight > 0.001;
+                            
+                            // Scanline rasterization
+                            for (let y = minY; y <= maxY; y++) {
+                                const yf = y + 0.5;
+                                
+                                // Compute X intercepts on the two edges
+                                // Long edge: v0 -> v2 (always present)
+                                const tLong = (yf - gy0) * invTotalHeight;
+                                const xLong = gx0 + (gx2 - gx0) * tLong;
+                                const zLong = gz0 + (gz2 - gz0) * tLong;
+                                
+                                // Short edge depends on which half we're in
+                                let xShort, zShort;
+                                if (yf < gy1 && hasTopHalf) {
+                                    // Top half: v0 -> v1
+                                    const tShort = (yf - gy0) / topHeight;
+                                    xShort = gx0 + (gx1 - gx0) * tShort;
+                                    zShort = gz0 + (gz1 - gz0) * tShort;
+                                } else if (hasBottomHalf) {
+                                    // Bottom half: v1 -> v2
+                                    const tShort = (yf - gy1) / bottomHeight;
+                                    xShort = gx1 + (gx2 - gx1) * tShort;
+                                    zShort = gz1 + (gz2 - gz1) * tShort;
+                                } else if (hasTopHalf) {
+                                    const tShort = (yf - gy0) / topHeight;
+                                    xShort = gx0 + (gx1 - gx0) * tShort;
+                                    zShort = gz0 + (gz1 - gz0) * tShort;
+                                } else {
+                                    continue;
+                                }
+                                
+                                // Ensure xLeft <= xRight
+                                let xLeft, xRight, zLeft, zRight;
+                                if (xLong < xShort) {
+                                    xLeft = xLong; xRight = xShort;
+                                    zLeft = zLong; zRight = zShort;
+                                } else {
+                                    xLeft = xShort; xRight = xLong;
+                                    zLeft = zShort; zRight = zLong;
+                                }
+                                
+                                // Clamp X to grid bounds
+                                const startX = Math.max(0, Math.ceil(xLeft));
+                                const endX = Math.min(GRID_RES - 1, Math.floor(xRight));
+                                
+                                if (startX > endX) continue;
+                                
+                                // Interpolate Z along the scanline
+                                const spanWidth = xRight - xLeft;
+                                const rowOffset = y * GRID_RES;
+                                
+                                if (spanWidth < 0.001) {
+                                    // Very thin span - use average Z
+                                    const z = (zLeft + zRight) * 0.5;
+                                    for (let x = startX; x <= endX; x++) {
+                                        const idx = rowOffset + x;
+                                        if (z < depthGrid[idx]) depthGrid[idx] = z;
+                                    }
+                                } else {
+                                    const invSpanWidth = 1.0 / spanWidth;
+                                    for (let x = startX; x <= endX; x++) {
+                                        const t = (x + 0.5 - xLeft) * invSpanWidth;
+                                        const z = zLeft + (zRight - zLeft) * t;
+                                        const idx = rowOffset + x;
+                                        if (z < depthGrid[idx]) depthGrid[idx] = z;
                                     }
                                 }
                             }
                         }
                     }
                     
-                    // Relative tolerance: 10% of depth range, with minimum
+                    // Relative tolerance: 5% of depth range for accurate occlusion
                     const depthRange = maxFrontZ - minFrontZ;
-                    const DEPTH_TOLERANCE = Math.max(0.01, depthRange * 0.1);
+                    const DEPTH_TOLERANCE = Math.max(0.005, depthRange * 0.05);
                     
-                    // Helper: sample depth grid with bilinear interpolation for smoother results
+                    // Helper: sample depth grid (direct lookup, no interpolation for speed)
                     function sampleDepthGrid(x, y) {
-                        const fx = x / cellW;
-                        const fy = y / cellH;
-                        const cx = Math.max(0, Math.min(GRID_RES - 1, Math.floor(fx)));
-                        const cy = Math.max(0, Math.min(GRID_RES - 1, Math.floor(fy)));
-                        return depthGrid[cy * GRID_RES + cx];
+                        const gx = Math.max(0, Math.min(GRID_RES - 1, Math.floor(x * scaleX)));
+                        const gy = Math.max(0, Math.min(GRID_RES - 1, Math.floor(y * scaleY)));
+                        return depthGrid[gy * GRID_RES + gx];
                     }
                     
                     function isPointVisible(x, y, z) {
@@ -1704,44 +1750,37 @@ function frame() {
                         const x0 = txArr[v0], y0 = tyArr[v0], z0 = tzArr[v0];
                         const x1 = txArr[v1], y1 = tyArr[v1], z1 = tzArr[v1];
                         
-                        // Multi-sample the edge to handle multiple visibility transitions
-                        const NUM_SAMPLES = 32;
-                        let segmentStart = -1; // -1 means not in a visible segment
+                        // Adaptive sample count based on edge screen length
+                        const edgeLen2D = Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
+                        // Sample every ~4 pixels, minimum 4 samples, max 24 for performance
+                        const NUM_SAMPLES = Math.max(4, Math.min(24, Math.ceil(edgeLen2D / 4)));
+                        const invSamples = 1.0 / NUM_SAMPLES;
+                        
+                        let segmentStart = -1;
                         
                         for (let s = 0; s <= NUM_SAMPLES; s++) {
-                            const t = s / NUM_SAMPLES;
+                            const t = s * invSamples;
                             const px = x0 + (x1 - x0) * t;
                             const py = y0 + (y1 - y0) * t;
                             const pz = z0 + (z1 - z0) * t;
                             const visible = isPointVisible(px, py, pz);
                             
                             if (visible) {
-                                if (segmentStart === -1) {
-                                    // Start of a new visible segment
-                                    segmentStart = s;
-                                }
-                            } else {
-                                if (segmentStart !== -1) {
-                                    // End of a visible segment - draw it
-                                    const t0 = segmentStart / NUM_SAMPLES;
-                                    const t1 = (s - 1) / NUM_SAMPLES;
-                                    const sx0 = x0 + (x1 - x0) * t0;
-                                    const sy0 = y0 + (y1 - y0) * t0;
-                                    const sx1 = x0 + (x1 - x0) * t1;
-                                    const sy1 = y0 + (y1 - y0) * t1;
-                                    ctx.moveTo(sx0, sy0);
-                                    ctx.lineTo(sx1, sy1);
-                                    segmentStart = -1;
-                                }
+                                if (segmentStart === -1) segmentStart = s;
+                            } else if (segmentStart !== -1) {
+                                // Draw visible segment
+                                const t0 = segmentStart * invSamples;
+                                const t1 = (s - 1) * invSamples;
+                                ctx.moveTo(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0);
+                                ctx.lineTo(x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1);
+                                segmentStart = -1;
                             }
                         }
                         
-                        // Handle segment that extends to the end of the edge
+                        // Handle segment extending to edge end
                         if (segmentStart !== -1) {
-                            const t0 = segmentStart / NUM_SAMPLES;
-                            const sx0 = x0 + (x1 - x0) * t0;
-                            const sy0 = y0 + (y1 - y0) * t0;
-                            ctx.moveTo(sx0, sy0);
+                            const t0 = segmentStart * invSamples;
+                            ctx.moveTo(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0);
                             ctx.lineTo(x1, y1);
                         }
                     }
