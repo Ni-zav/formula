@@ -844,6 +844,66 @@ function initSliders() {
 initSliders();
 
 // ============================================
+// Mouse drag rotation (like Blender orbit)
+// ============================================
+let isDragging = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+let savedSpeedDuringDrag = 0;
+
+game.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    // Pause rotation while dragging
+    savedSpeedDuringDrag = CAMERA.rotationSpeed;
+    CAMERA.rotationSpeed = 0;
+    speedSlider.value = 0;
+    speedValue.textContent = '0.0x';
+    game.style.cursor = 'grabbing';
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    
+    const deltaX = e.clientX - lastMouseX;
+    const deltaY = e.clientY - lastMouseY;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    
+    // Sensitivity factor (degrees per pixel)
+    const sensitivity = 0.5;
+    
+    // Update rotation (horizontal drag = Y-axis rotation)
+    let rotationDeg = (angle * 180 / Math.PI) + deltaX * sensitivity;
+    // Wrap to 0-360
+    while (rotationDeg >= 360) rotationDeg -= 360;
+    while (rotationDeg < 0) rotationDeg += 360;
+    angle = rotationDeg * Math.PI / 180;
+    rotationSlider.value = Math.round(rotationDeg);
+    rotationValue.textContent = `${Math.round(rotationDeg)}°`;
+    
+    // Update pitch (vertical drag = X-axis rotation)
+    let pitchDeg = CAMERA.pitch + deltaY * sensitivity;
+    // Wrap to 0-360
+    while (pitchDeg >= 360) pitchDeg -= 360;
+    while (pitchDeg < 0) pitchDeg += 360;
+    CAMERA.pitch = Math.round(pitchDeg);
+    pitchSlider.value = CAMERA.pitch;
+    pitchValue.textContent = `${CAMERA.pitch}°`;
+});
+
+document.addEventListener('mouseup', () => {
+    if (isDragging) {
+        isDragging = false;
+        game.style.cursor = 'grab';
+    }
+});
+
+// Set initial cursor style
+game.style.cursor = 'grab';
+
+// ============================================
 // Derived camera values
 // ============================================
 function getFocalScale() {
