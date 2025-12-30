@@ -40,9 +40,15 @@ const CAMERA = {
         showEdges: true        // Show wireframe edges on solid mode
     },
     
-    // Z-Depth Culling settings (for wireframe mode)
-    zCulling: {
+    // Backface Culling settings (hides faces facing away based on winding order)
+    backfaceCull: {
         enabled: false
+    },
+    
+    // Depth Culling settings (hides faces behind model center)
+    depthCull: {
+        enabled: false,
+        threshold: 0  // -1 to 1, where 0 is model center
     }
 };
 
@@ -65,7 +71,11 @@ const loadBtn = document.getElementById('load-btn');
 const modelNameEl = document.getElementById('model-name');
 const convertBtn = document.getElementById('convert-btn');
 const convertFileInput = document.getElementById('convert-file-input');
-const zCullingToggle = document.getElementById('z-culling-toggle');
+const backfaceCullToggle = document.getElementById('backface-cull-toggle');
+const depthCullToggle = document.getElementById('depth-cull-toggle');
+const depthThresholdSlider = document.getElementById('depth-threshold-slider');
+const depthThresholdValue = document.getElementById('depth-threshold-value');
+const depthThresholdBox = document.getElementById('depth-threshold-box');
 const renderModeToggle = document.getElementById('render-mode-toggle');
 const showEdgesToggle = document.getElementById('show-edges-toggle');
 const solidTypeToggle = document.getElementById('solid-type-toggle');
@@ -663,13 +673,35 @@ speedSlider.addEventListener('input', (e) => {
 });
 
 // ============================================
-// Z-Depth Culling Controls (for wireframe mode)
+// Culling Controls
 // ============================================
-if (zCullingToggle) {
-    zCullingToggle.addEventListener('click', () => {
-        CAMERA.zCulling.enabled = !CAMERA.zCulling.enabled;
-        zCullingToggle.classList.toggle('active', CAMERA.zCulling.enabled);
-        zCullingToggle.textContent = CAMERA.zCulling.enabled ? 'On' : 'Off';
+if (backfaceCullToggle) {
+    backfaceCullToggle.addEventListener('click', () => {
+        CAMERA.backfaceCull.enabled = !CAMERA.backfaceCull.enabled;
+        backfaceCullToggle.classList.toggle('active', CAMERA.backfaceCull.enabled);
+        backfaceCullToggle.textContent = CAMERA.backfaceCull.enabled ? 'On' : 'Off';
+    });
+}
+
+if (depthCullToggle) {
+    depthCullToggle.addEventListener('click', () => {
+        CAMERA.depthCull.enabled = !CAMERA.depthCull.enabled;
+        depthCullToggle.classList.toggle('active', CAMERA.depthCull.enabled);
+        depthCullToggle.textContent = CAMERA.depthCull.enabled ? 'On' : 'Off';
+        // Show/hide depth threshold slider
+        if (depthThresholdBox) {
+            depthThresholdBox.style.display = CAMERA.depthCull.enabled ? 'flex' : 'none';
+        }
+    });
+}
+
+// Depth threshold slider
+if (depthThresholdSlider) {
+    depthThresholdSlider.addEventListener('input', () => {
+        CAMERA.depthCull.threshold = parseFloat(depthThresholdSlider.value);
+        if (depthThresholdValue) {
+            depthThresholdValue.textContent = CAMERA.depthCull.threshold.toFixed(1);
+        }
     });
 }
 
@@ -1031,6 +1063,9 @@ function transformAllVertices(angle, dz) {
     const isPerspective = CAMERA.type === "perspective";
     const zoom = isPerspective ? CAMERA.perspectiveZoom : CAMERA.orthoZoom;
     
+    // Calculate model center Z as average of all vertex Z values
+    let sumZ = 0;
+    
     for (let i = 0; i < vertexCount; i++) {
         const idx = i * 3;
         const x = vsFlat[idx];
@@ -1050,6 +1085,7 @@ function transformAllVertices(angle, dz) {
         
         // Store the transformed Z for culling calculations
         transformedZ[i] = tz;
+        sumZ += tz;
         
         let px, py;
         
@@ -1068,8 +1104,8 @@ function transformAllVertices(angle, dz) {
         transformedY[i] = -py * halfHeight + halfHeight;
     }
     
-    // Store rotation values for screen-space backface culling (calculated during render)
-    // This avoids the expensive per-face normal transformation
+    // Update cached model center Z for backface culling
+    modelCenterZ = sumZ / vertexCount;
 }
 
 let angle = 0;
@@ -1077,9 +1113,35 @@ let lastTime = performance.now();
 let frameCount = 0;
 let fps = 0;
 
+// Cached model center Z - updated each frame during transformAllVertices
+let modelCenterZ = 0;
+
+// Helper: Check if a face should be visible using depth-based culling
+// A face is visible if it's closer to the camera than the adjusted threshold
+// threshold: -1 (show more back) to 1 (show more front), 0 = model center
+function isFaceVisible(faceIdx) {
+    const offset = faceOffsets[faceIdx];
+    const len = faceLengths[faceIdx];
+    if (len < 3) return true;
+    
+    // Calculate average Z depth of this face
+    let faceAvgZ = 0;
+    for (let j = 0; j < len; j++) {
+        faceAvgZ += transformedZ[faceIndices[offset + j]];    }
+    faceAvgZ /= len;
+    
+    // Apply threshold offset to model center
+    // threshold ranges from -1 to 1, scale it to model size
+    // Negative threshold = show more of the back, Positive = show less
+    const thresholdZ = modelCenterZ + CAMERA.depthCull.threshold;
+    
+    // Face is visible if it's in front of (closer than) the threshold
+    // In view space, smaller Z = closer to camera
+    return faceAvgZ < thresholdZ;
+}
+
 // Helper: Check if a face is front-facing using screen-space signed area
-// Uses the cross product of two edges
-// In Canvas2D, Y increases downward, so negative signed area = front-facing
+// Uses the cross product of two edges for winding order check
 function isFaceFrontFacing(faceIdx) {
     const offset = faceOffsets[faceIdx];
     const len = faceLengths[faceIdx];
@@ -1096,7 +1158,7 @@ function isFaceFrontFacing(faceIdx) {
     const x2 = transformedX[v2], y2 = transformedY[v2];
     
     // Signed area (2D cross product)
-    // Positive = front-facing, Negative = back-facing
+    // Positive signed area = front-facing (CW in screen space with Y-down)
     const signedArea = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
     
     return signedArea > 0;
@@ -1120,7 +1182,8 @@ function frame() {
         
         if (CAMERA.render.mode === 'solid' && faceCount > 0) {
             // SOLID MODE: Draw filled faces
-            const useZCull = CAMERA.zCulling.enabled;
+            const useBackfaceCull = CAMERA.backfaceCull.enabled;
+            const useDepthCull = CAMERA.depthCull.enabled;
             const isTransparent = CAMERA.render.solidType === 'transparent';
             
             ctx.strokeStyle = FOREGROUND;
@@ -1133,13 +1196,19 @@ function frame() {
                 
                 // Cache visibility for edge drawing later, then draw each face
                 for (let i = 0; i < faceCount; i++) {
-                    if (useZCull) {
-                        const vis = isFaceFrontFacing(i);
-                        faceVisible[i] = vis ? 1 : 0;
-                        if (!vis) continue;
-                    } else {
-                        faceVisible[i] = 1;
+                    let visible = true;
+                    
+                    // Backface culling: check winding order
+                    if (useBackfaceCull && !isFaceFrontFacing(i)) {
+                        visible = false;
                     }
+                    // Depth culling: check if behind model center
+                    if (visible && useDepthCull && !isFaceVisible(i)) {
+                        visible = false;
+                    }
+                    
+                    faceVisible[i] = visible ? 1 : 0;
+                    if (!visible) continue;
                     
                     const offset = faceOffsets[i];
                     const len = faceLengths[i];
@@ -1169,8 +1238,7 @@ function frame() {
                 
                 ctx.globalAlpha = 1.0; // Reset alpha
             } else {
-                // OPAQUE MODE: Draw solid faces with proper hidden line removal
-                // In opaque mode, back-facing faces are ALWAYS hidden (no point drawing them)
+                // OPAQUE MODE: Draw solid faces with proper depth sorting
                 ctx.fillStyle = FACE_COLOR;
                 ctx.strokeStyle = FOREGROUND;
                 ctx.lineWidth = 0.3;
@@ -1178,14 +1246,22 @@ function frame() {
                 const showEdges = CAMERA.render.showEdges;
                 
                 // Calculate avgZ and visibility for all faces
-                // OPAQUE ALWAYS culls backfaces (they're hidden by front faces)
                 let visibleCount = 0;
                 
                 for (let i = 0; i < faceCount; i++) {
-                    // Always cull back-facing faces in opaque mode
-                    const isFront = isFaceFrontFacing(i);
-                    faceVisible[i] = isFront ? 1 : 0;
-                    if (!isFront) continue;
+                    let visible = true;
+                    
+                    // Backface culling: check winding order (only if toggle is on)
+                    if (useBackfaceCull && !isFaceFrontFacing(i)) {
+                        visible = false;
+                    }
+                    // Depth culling: check if behind model center (only if toggle is on)
+                    if (visible && useDepthCull && !isFaceVisible(i)) {
+                        visible = false;
+                    }
+                    
+                    faceVisible[i] = visible ? 1 : 0;
+                    if (!visible) continue;
                     
                     const offset = faceOffsets[i];
                     const len = faceLengths[i];
@@ -1249,14 +1325,28 @@ function frame() {
                 
                 ctx.stroke();
             }
-        } else if (CAMERA.zCulling.enabled && faceCount > 0) {
-            // WIREFRAME MODE with Z-Culling
+        } else if ((CAMERA.backfaceCull.enabled || CAMERA.depthCull.enabled) && faceCount > 0) {
+            // WIREFRAME MODE with Culling
             ctx.strokeStyle = FOREGROUND;
             ctx.lineWidth = 0.3;
             
+            const useBackfaceCull = CAMERA.backfaceCull.enabled;
+            const useDepthCull = CAMERA.depthCull.enabled;
+            
             // Cache face visibility first
             for (let i = 0; i < faceCount; i++) {
-                faceVisible[i] = isFaceFrontFacing(i) ? 1 : 0;
+                let visible = true;
+                
+                // Backface culling: check winding order
+                if (useBackfaceCull && !isFaceFrontFacing(i)) {
+                    visible = false;
+                }
+                // Depth culling: check if behind model center
+                if (visible && useDepthCull && !isFaceVisible(i)) {
+                    visible = false;
+                }
+                
+                faceVisible[i] = visible ? 1 : 0;
             }
             
             ctx.beginPath();
@@ -1314,8 +1404,11 @@ function frame() {
     ctx.fillText(`${fps} FPS`, 10, 20);
     if (CAMERA.render.mode === 'solid') {
         ctx.fillText(`Solid${CAMERA.render.showEdges ? ' + Edges' : ''}`, 10, 36);
-    } else if (CAMERA.zCulling.enabled) {
-        ctx.fillText(`Z-Culling: ON`, 10, 36);
+    } else if (CAMERA.backfaceCull.enabled || CAMERA.depthCull.enabled) {
+        const modes = [];
+        if (CAMERA.backfaceCull.enabled) modes.push('BF');
+        if (CAMERA.depthCull.enabled) modes.push('Depth');
+        ctx.fillText(`Cull: ${modes.join('+')}`, 10, 36);
     }
     
     requestAnimationFrame(frame);

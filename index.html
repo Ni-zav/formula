@@ -455,8 +455,19 @@
             </div>
             
             <div class="z-culling-box">
-                <label>Z-CULL</label>
-                <button class="z-culling-toggle" id="z-culling-toggle">Off</button>
+                <label>BACKFACE</label>
+                <button class="z-culling-toggle" id="backface-cull-toggle">Off</button>
+            </div>
+            
+            <div class="z-culling-box">
+                <label>DEPTH</label>
+                <button class="z-culling-toggle" id="depth-cull-toggle">Off</button>
+            </div>
+            
+            <div class="slider-box" id="depth-threshold-box" style="display: none;">
+                <label>D-THR</label>
+                <input type="range" id="depth-threshold-slider" min="-1" max="1" step="0.1" value="0">
+                <span class="value" id="depth-threshold-value">0.0</span>
             </div>
         </div>
         

@@ -14,3 +14,4 @@ Male.OBJ
 # Wrangler
 .wrangler/
 node_modules/
+.github/
