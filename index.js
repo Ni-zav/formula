@@ -1709,21 +1709,37 @@ function frame() {
                             }
                         }
                     }
-                    
-                    // Relative tolerance: 5% of depth range for accurate occlusion
+                    // Relative tolerance for depth comparison
                     const depthRange = maxFrontZ - minFrontZ;
-                    const DEPTH_TOLERANCE = Math.max(0.005, depthRange * 0.05);
+                    const DEPTH_TOLERANCE = Math.max(0.005, depthRange * 0.04);
                     
-                    // Helper: sample depth grid (direct lookup, no interpolation for speed)
+                    // Helper: sample depth grid with bounds check
                     function sampleDepthGrid(x, y) {
                         const gx = Math.max(0, Math.min(GRID_RES - 1, Math.floor(x * scaleX)));
                         const gy = Math.max(0, Math.min(GRID_RES - 1, Math.floor(y * scaleY)));
                         return depthGrid[gy * GRID_RES + gx];
                     }
                     
-                    function isPointVisible(x, y, z) {
-                        const gridDepth = sampleDepthGrid(x, y);
-                        return gridDepth === Infinity || z <= gridDepth + DEPTH_TOLERANCE;
+                    // Multi-sample visibility check with perpendicular offset
+                    // This helps avoid self-occlusion where silhouette edges meet their own front faces
+                    function isEdgePointVisible(px, py, pz, nx, ny) {
+                        // Sample at center and offset perpendicular to edge direction
+                        const OFFSET = 1.5; // pixels offset perpendicular to edge
+                        
+                        // Center sample
+                        const d0 = sampleDepthGrid(px, py);
+                        const vis0 = d0 === Infinity || pz <= d0 + DEPTH_TOLERANCE;
+                        
+                        // Offset sample on one side (perpendicular to edge)
+                        const d1 = sampleDepthGrid(px + nx * OFFSET, py + ny * OFFSET);
+                        const vis1 = d1 === Infinity || pz <= d1 + DEPTH_TOLERANCE;
+                        
+                        // Offset sample on other side
+                        const d2 = sampleDepthGrid(px - nx * OFFSET, py - ny * OFFSET);
+                        const vis2 = d2 === Infinity || pz <= d2 + DEPTH_TOLERANCE;
+                        
+                        // Majority vote: visible if 2+ samples pass
+                        return (vis0 ? 1 : 0) + (vis1 ? 1 : 0) + (vis2 ? 1 : 0) >= 2;
                     }
                     
                     ctx.beginPath();
@@ -1750,20 +1766,28 @@ function frame() {
                         const x0 = txArr[v0], y0 = tyArr[v0], z0 = tzArr[v0];
                         const x1 = txArr[v1], y1 = tyArr[v1], z1 = tzArr[v1];
                         
-                        // Adaptive sample count based on edge screen length
-                        const edgeLen2D = Math.sqrt((x1 - x0) * (x1 - x0) + (y1 - y0) * (y1 - y0));
-                        // Sample every ~4 pixels, minimum 4 samples, max 24 for performance
-                        const NUM_SAMPLES = Math.max(4, Math.min(24, Math.ceil(edgeLen2D / 4)));
+                        // Compute edge direction and perpendicular normal for offset sampling
+                        const dx = x1 - x0, dy = y1 - y0;
+                        const edgeLen2D = Math.sqrt(dx * dx + dy * dy);
+                        if (edgeLen2D < 1) continue; // Skip tiny edges
+                        
+                        // Perpendicular normal (rotated 90 degrees)
+                        const invLen = 1.0 / edgeLen2D;
+                        const nx = -dy * invLen;
+                        const ny = dx * invLen;
+                        
+                        // Adaptive sample count: ~4px spacing, min 4, max 20
+                        const NUM_SAMPLES = Math.max(4, Math.min(20, Math.ceil(edgeLen2D / 4)));
                         const invSamples = 1.0 / NUM_SAMPLES;
                         
                         let segmentStart = -1;
                         
                         for (let s = 0; s <= NUM_SAMPLES; s++) {
                             const t = s * invSamples;
-                            const px = x0 + (x1 - x0) * t;
-                            const py = y0 + (y1 - y0) * t;
+                            const px = x0 + dx * t;
+                            const py = y0 + dy * t;
                             const pz = z0 + (z1 - z0) * t;
-                            const visible = isPointVisible(px, py, pz);
+                            const visible = isEdgePointVisible(px, py, pz, nx, ny);
                             
                             if (visible) {
                                 if (segmentStart === -1) segmentStart = s;
@@ -1771,8 +1795,8 @@ function frame() {
                                 // Draw visible segment
                                 const t0 = segmentStart * invSamples;
                                 const t1 = (s - 1) * invSamples;
-                                ctx.moveTo(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0);
-                                ctx.lineTo(x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1);
+                                ctx.moveTo(x0 + dx * t0, y0 + dy * t0);
+                                ctx.lineTo(x0 + dx * t1, y0 + dy * t1);
                                 segmentStart = -1;
                             }
                         }
@@ -1780,7 +1804,7 @@ function frame() {
                         // Handle segment extending to edge end
                         if (segmentStart !== -1) {
                             const t0 = segmentStart * invSamples;
-                            ctx.moveTo(x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0);
+                            ctx.moveTo(x0 + dx * t0, y0 + dy * t0);
                             ctx.lineTo(x1, y1);
                         }
                     }
