@@ -1479,9 +1479,15 @@ function frame() {
                 
                 ctx.globalAlpha = 1.0;
             } else {
-                // OPAQUE MODE: Draw solid faces with proper depth sorting
-                // MUST use per-face rendering to respect depth sort (back-to-front)
+                // OPAQUE MODE: Draw solid faces with proper hidden-line removal
+                // 
+                // APPROACH: Per-edge occlusion testing
+                // - For each silhouette edge, check if it's occluded by ANY front-facing face
+                // - Use ALL front-facing faces for occlusion (not affected by depth culling)
+                // - Only draw silhouettes that are NOT occluded
+                //
                 const showEdges = CAMERA.render.showEdges;
+                const showSilhouette = CAMERA.render.showSilhouette;
                 
                 // Cache array references for hot loop
                 const fOffsets = faceOffsets;
@@ -1496,49 +1502,65 @@ function frame() {
                 const fSortIdx = faceSortIndices;
                 const fCount = faceCount;
                 
-                ctx.fillStyle = FACE_COLOR;
-                ctx.strokeStyle = FOREGROUND;
-                ctx.lineWidth = 0.3;
+                // Pre-compute face bounding boxes and Z for occlusion testing
+                // These are used for ALL front-facing faces (not just visible ones)
+                const faceBBoxMinX = new Float32Array(fCount);
+                const faceBBoxMaxX = new Float32Array(fCount);
+                const faceBBoxMinY = new Float32Array(fCount);
+                const faceBBoxMaxY = new Float32Array(fCount);
                 
-                // Calculate avgZ, visibility, and cache front-facing state
+                // Calculate front-facing state and avgZ for ALL faces
                 let visibleCount = 0;
                 
                 for (let i = 0; i < fCount; i++) {
-                    // Cache front-facing state for silhouette drawing later
                     fIsFront[i] = isFaceFrontFacing(i) ? 1 : 0;
                     
-                    // Backface culling: check winding order (only if toggle is on)
+                    const offset = fOffsets[i];
+                    const len = fLengths[i];
+                    
+                    // Calculate average Z and bounding box for ALL faces
+                    let avgZ = 0;
+                    let minX = Infinity, maxX = -Infinity;
+                    let minY = Infinity, maxY = -Infinity;
+                    
+                    for (let j = 0; j < len; j++) {
+                        const vIdx = fIndices[offset + j];
+                        avgZ += tzArr[vIdx];
+                        const x = txArr[vIdx], y = tyArr[vIdx];
+                        if (x < minX) minX = x; if (x > maxX) maxX = x;
+                        if (y < minY) minY = y; if (y > maxY) maxY = y;
+                    }
+                    
+                    fAvgZ[i] = avgZ / len;
+                    faceBBoxMinX[i] = minX;
+                    faceBBoxMaxX[i] = maxX;
+                    faceBBoxMinY[i] = minY;
+                    faceBBoxMaxY[i] = maxY;
+                    
+                    // Check visibility for rendering (respects culling toggles)
                     if (useBackfaceCull && !fIsFront[i]) {
                         fVisible[i] = 0;
                         continue;
                     }
-                    // Depth culling: check if behind model center (only if toggle is on)
                     if (useDepthCull && !isFaceVisible(i)) {
                         fVisible[i] = 0;
                         continue;
                     }
                     
                     fVisible[i] = 1;
-                    
-                    const offset = fOffsets[i];
-                    const len = fLengths[i];
-                    
-                    // Calculate average Z inline
-                    let avgZ = 0;
-                    for (let j = 0; j < len; j++) {
-                        avgZ += tzArr[fIndices[offset + j]];
-                    }
-                    
-                    fAvgZ[i] = avgZ / len;
                     fSortIdx[visibleCount++] = i;
                 }
                 
-                // Sort visible faces by depth (back-to-front) using optimized quicksort
+                // Sort visible faces by depth (back-to-front)
                 if (visibleCount > 1) {
                     quickSortDepth(fSortIdx, fAvgZ, 0, visibleCount - 1);
                 }
                 
-                // Draw faces back-to-front (per-face for correct depth ordering)
+                // Draw faces back-to-front
+                ctx.fillStyle = FACE_COLOR;
+                ctx.strokeStyle = FOREGROUND;
+                ctx.lineWidth = 0.3;
+                
                 for (let s = 0; s < visibleCount; s++) {
                     const i = fSortIdx[s];
                     const offset = fOffsets[i];
@@ -1554,6 +1576,64 @@ function frame() {
                     ctx.closePath();
                     ctx.fill();
                     if (showEdges) ctx.stroke();
+                }
+                
+                // Draw silhouettes with per-edge occlusion testing
+                // Check against ALL front-facing faces, not just rendered ones
+                if (showSilhouette) {
+                    ctx.beginPath();
+                    ctx.strokeStyle = FOREGROUND;
+                    ctx.lineWidth = 0.6;
+                    
+                    const edgeLen = edges.length;
+                    
+                    for (let i = 0; i < edgeLen; i++) {
+                        const adjacentFaces = edgeToFaces[i];
+                        const edge = edges[i];
+                        
+                        // Determine if this is a silhouette edge
+                        let isSilhouette = false;
+                        if (adjacentFaces.length === 1) {
+                            isSilhouette = fIsFront[adjacentFaces[0]] === 1;
+                        } else if (adjacentFaces.length === 2) {
+                            isSilhouette = fIsFront[adjacentFaces[0]] !== fIsFront[adjacentFaces[1]];
+                        }
+                        
+                        if (!isSilhouette) continue;
+                        
+                        // Compute edge bounding box and Z
+                        const v0 = edge[0], v1 = edge[1];
+                        const edgeZ = (tzArr[v0] + tzArr[v1]) / 2;
+                        const edgeMinX = Math.min(txArr[v0], txArr[v1]);
+                        const edgeMaxX = Math.max(txArr[v0], txArr[v1]);
+                        const edgeMinY = Math.min(tyArr[v0], tyArr[v1]);
+                        const edgeMaxY = Math.max(tyArr[v0], tyArr[v1]);
+                        
+                        // Check if edge is occluded by ANY front-facing face
+                        let isOccluded = false;
+                        
+                        for (let f = 0; f < fCount; f++) {
+                            if (!fIsFront[f]) continue; // Only front-facing faces can occlude
+                            
+                            // Face must be in FRONT of edge (smaller Z = closer to camera)
+                            if (fAvgZ[f] >= edgeZ) continue;
+                            
+                            // Check bounding box overlap
+                            if (faceBBoxMaxX[f] < edgeMinX || faceBBoxMinX[f] > edgeMaxX) continue;
+                            if (faceBBoxMaxY[f] < edgeMinY || faceBBoxMinY[f] > edgeMaxY) continue;
+                            
+                            // Bounding boxes overlap and face is in front - edge is occluded
+                            isOccluded = true;
+                            break;
+                        }
+                        
+                        if (!isOccluded) {
+                            ctx.moveTo(txArr[v0], tyArr[v0]);
+                            ctx.lineTo(txArr[v1], tyArr[v1]);
+                        }
+                    }
+                    
+                    ctx.stroke();
                 }
             }
             
@@ -1666,92 +1746,70 @@ function frame() {
             ctx.stroke();
         }
         
-        // Draw silhouettes AFTER all faces (so they appear on top) with depth-based culling in opaque mode
+        // Draw silhouettes for NON-OPAQUE modes
+        // (Opaque mode silhouettes are handled above with proper painter's algorithm occlusion)
+        // 
+        // MODE-SPECIFIC BEHAVIOR:
+        // - OPAQUE SOLID: Already handled above (silhouettes drawn first, then faces paint over)
+        // - TRANSPARENT SOLID: All silhouettes visible ON TOP (can see through)
+        // - WIREFRAME: Front-facing silhouettes only
+        //
         if (CAMERA.render.showSilhouette && faceCount > 0) {
-            const isOpaqueMode = CAMERA.render.mode === 'solid' && CAMERA.render.solidType === 'opaque';
+            const isOpaqueSolid = CAMERA.render.mode === 'solid' && CAMERA.render.solidType === 'opaque';
             
-            // In opaque mode, pre-calculate minimum Z of visible faces for depth culling
-            if (isOpaqueMode) {
-                minVisibleFaceZ = Infinity;
+            // Skip - opaque silhouettes already drawn with proper occlusion
+            if (isOpaqueSolid) {
+                // Do nothing - handled above
+            } else {
+                const isTransparent = CAMERA.render.mode === 'solid' && CAMERA.render.solidType === 'transparent';
+                const isWireframe = CAMERA.render.mode === 'wireframe';
                 
-                const useBackfaceCull = CAMERA.backfaceCull.enabled;
-                const useDepthCull = CAMERA.depthCull.enabled;
-                const fCount = faceCount;
                 const fIsFront = faceIsFrontFacing;
-                const fOffsets = faceOffsets;
-                const fLengths = faceLengths;
-                const fIndices = faceIndices;
-                const tzArr = transformedZ;
+                const fCount = faceCount;
                 
-                // Scan visible faces to find minimum Z
+                // Compute front-facing state for all faces
                 for (let i = 0; i < fCount; i++) {
-                    if (useBackfaceCull && !fIsFront[i]) continue;
-                    if (useDepthCull && !isFaceVisible(i)) continue;
-                    
-                    // Calculate face Z
-                    const offset = fOffsets[i];
-                    const len = fLengths[i];
-                    let avgZ = 0;
-                    for (let j = 0; j < len; j++) {
-                        avgZ += tzArr[fIndices[offset + j]];
-                    }
-                    avgZ /= len;
-                    
-                    if (avgZ < minVisibleFaceZ) {
-                        minVisibleFaceZ = avgZ;
-                    }
+                    fIsFront[i] = isFaceFrontFacing(i) ? 1 : 0;
                 }
-            }
-            
-            ctx.beginPath();
-            
-            const edgeLen = edges.length;
-            const fIsFront = faceIsFrontFacing;
-            const tzArr = transformedZ;
-            
-            for (let i = 0; i < edgeLen; i++) {
-                const adjacentFaces = edgeToFaces[i];
                 
-                if (adjacentFaces.length === 1) {
-                    // Boundary edge
+                ctx.beginPath();
+                
+                const edgeLen = edges.length;
+                const txArr = transformedX;
+                const tyArr = transformedY;
+                
+                for (let i = 0; i < edgeLen; i++) {
+                    const adjacentFaces = edgeToFaces[i];
                     const edge = edges[i];
-                    const v1Z = tzArr[edge[0]];
-                    const v2Z = tzArr[edge[1]];
                     
-                    // In opaque mode: skip if behind visible faces
-                    // In other modes: always draw
-                    if (isOpaqueMode && (v1Z > minVisibleFaceZ || v2Z > minVisibleFaceZ)) {
-                        continue;
-                    }
-                    
-                    ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
-                    ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
-                } else if (adjacentFaces.length === 2) {
-                    // Silhouette edge: check cached front-facing state
-                    const isFront1 = fIsFront[adjacentFaces[0]];
-                    const isFront2 = fIsFront[adjacentFaces[1]];
-                    
-                    // Only draw if one is front and one is back
-                    if (isFront1 !== isFront2) {
-                        const edge = edges[i];
-                        const v1Z = tzArr[edge[0]];
-                        const v2Z = tzArr[edge[1]];
+                    if (adjacentFaces.length === 1) {
+                        // Boundary edge
+                        const isFront = fIsFront[adjacentFaces[0]];
                         
-                        // In opaque mode: skip if behind visible faces
-                        // In other modes: always draw
-                        if (isOpaqueMode && (v1Z > minVisibleFaceZ || v2Z > minVisibleFaceZ)) {
-                            continue;
+                        // WIREFRAME: only show front-facing boundary edges
+                        if (isWireframe && !isFront) continue;
+                        
+                        // Only draw if adjacent face is front-facing
+                        if (isFront) {
+                            ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
+                            ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
                         }
+                    } else if (adjacentFaces.length === 2) {
+                        const isFront1 = fIsFront[adjacentFaces[0]];
+                        const isFront2 = fIsFront[adjacentFaces[1]];
                         
-                        ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
-                        ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                        // Silhouette edge: one face front-facing, one back-facing
+                        if (isFront1 !== isFront2) {
+                            ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
+                            ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
+                        }
                     }
                 }
+                
+                ctx.strokeStyle = FOREGROUND;
+                ctx.lineWidth = 0.6;
+                ctx.stroke();
             }
-            
-            ctx.strokeStyle = FOREGROUND;
-            ctx.lineWidth = 0.6;
-            ctx.stroke();
         }
     } else {
         // Show placeholder text when no model is loaded
