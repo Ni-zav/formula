@@ -1578,12 +1578,12 @@ function frame() {
                     if (showEdges) ctx.stroke();
                 }
                 
-                // Draw silhouettes with depth-map based occlusion
-                // Build a low-res depth grid from ALL front-facing faces
-                // Silhouettes are visible when they're at or near the front visible surface
+                // Draw silhouettes with depth-map based occlusion and edge splitting
+                // Build a depth grid from ALL front-facing faces
+                // Test each vertex, split edges at visibility boundaries
                 if (showSilhouette) {
-                    // Build depth grid (minimum Z at each cell)
-                    const GRID_RES = 40;
+                    // Build higher-res depth grid for better precision
+                    const GRID_RES = 80;
                     const depthGrid = new Float32Array(GRID_RES * GRID_RES);
                     depthGrid.fill(Infinity);
                     
@@ -1596,7 +1596,6 @@ function frame() {
                     for (let f = 0; f < fCount; f++) {
                         if (!fIsFront[f]) continue;
                         
-                        // Get face bounding box grid cells
                         const minCellX = Math.max(0, Math.floor(faceBBoxMinX[f] / cellW));
                         const maxCellX = Math.min(GRID_RES - 1, Math.floor(faceBBoxMaxX[f] / cellW));
                         const minCellY = Math.max(0, Math.floor(faceBBoxMinY[f] / cellH));
@@ -1604,7 +1603,6 @@ function frame() {
                         
                         const faceZ = fAvgZ[f];
                         
-                        // Update depth grid cells covered by this face
                         for (let cy = minCellY; cy <= maxCellY; cy++) {
                             for (let cx = minCellX; cx <= maxCellX; cx++) {
                                 const idx = cy * GRID_RES + cx;
@@ -1615,16 +1613,16 @@ function frame() {
                         }
                     }
                     
-                    // Calculate depth range for tolerance
-                    let minZ = Infinity, maxZ = -Infinity;
-                    for (let f = 0; f < fCount; f++) {
-                        if (!fIsFront[f]) continue;
-                        if (fAvgZ[f] < minZ) minZ = fAvgZ[f];
-                        if (fAvgZ[f] > maxZ) maxZ = fAvgZ[f];
+                    // Helper: check if a point is visible (in front of or at the depth grid)
+                    // Uses a small tolerance for edge-on-surface cases
+                    const DEPTH_TOLERANCE = 0.05; // Small fixed tolerance
+                    
+                    function isPointVisible(x, y, z) {
+                        const cellX = Math.max(0, Math.min(GRID_RES - 1, Math.floor(x / cellW)));
+                        const cellY = Math.max(0, Math.min(GRID_RES - 1, Math.floor(y / cellH)));
+                        const gridDepth = depthGrid[cellY * GRID_RES + cellX];
+                        return gridDepth === Infinity || z <= gridDepth + DEPTH_TOLERANCE;
                     }
-                    // Tolerance: edge is visible if within 30% of the depth range from the front
-                    const depthRange = maxZ - minZ;
-                    const depthTolerance = depthRange > 0 ? depthRange * 0.2 : 0.1;
                     
                     ctx.beginPath();
                     ctx.strokeStyle = FOREGROUND;
@@ -1646,22 +1644,49 @@ function frame() {
                         
                         if (!isSilhouette) continue;
                         
-                        // Compute edge center and Z
                         const v0 = edge[0], v1 = edge[1];
-                        const edgeCenterX = (txArr[v0] + txArr[v1]) / 2;
-                        const edgeCenterY = (tyArr[v0] + tyArr[v1]) / 2;
-                        const edgeZ = (tzArr[v0] + tzArr[v1]) / 2;
+                        const x0 = txArr[v0], y0 = tyArr[v0], z0 = tzArr[v0];
+                        const x1 = txArr[v1], y1 = tyArr[v1], z1 = tzArr[v1];
                         
-                        // Sample depth grid at edge center
-                        const cellX = Math.max(0, Math.min(GRID_RES - 1, Math.floor(edgeCenterX / cellW)));
-                        const cellY = Math.max(0, Math.min(GRID_RES - 1, Math.floor(edgeCenterY / cellH)));
-                        const gridDepth = depthGrid[cellY * GRID_RES + cellX];
+                        // Multi-sample the edge to handle multiple visibility transitions
+                        const NUM_SAMPLES = 16;
+                        let segmentStart = -1; // -1 means not in a visible segment
                         
-                        // Edge is visible if it's at or near the front surface (within tolerance)
-                        // Or if there's no geometry at this location (gridDepth is Infinity)
-                        if (gridDepth === Infinity || edgeZ <= gridDepth + depthTolerance) {
-                            ctx.moveTo(txArr[v0], tyArr[v0]);
-                            ctx.lineTo(txArr[v1], tyArr[v1]);
+                        for (let s = 0; s <= NUM_SAMPLES; s++) {
+                            const t = s / NUM_SAMPLES;
+                            const px = x0 + (x1 - x0) * t;
+                            const py = y0 + (y1 - y0) * t;
+                            const pz = z0 + (z1 - z0) * t;
+                            const visible = isPointVisible(px, py, pz);
+                            
+                            if (visible) {
+                                if (segmentStart === -1) {
+                                    // Start of a new visible segment
+                                    segmentStart = s;
+                                }
+                            } else {
+                                if (segmentStart !== -1) {
+                                    // End of a visible segment - draw it
+                                    const t0 = segmentStart / NUM_SAMPLES;
+                                    const t1 = (s - 1) / NUM_SAMPLES;
+                                    const sx0 = x0 + (x1 - x0) * t0;
+                                    const sy0 = y0 + (y1 - y0) * t0;
+                                    const sx1 = x0 + (x1 - x0) * t1;
+                                    const sy1 = y0 + (y1 - y0) * t1;
+                                    ctx.moveTo(sx0, sy0);
+                                    ctx.lineTo(sx1, sy1);
+                                    segmentStart = -1;
+                                }
+                            }
+                        }
+                        
+                        // Handle segment that extends to the end of the edge
+                        if (segmentStart !== -1) {
+                            const t0 = segmentStart / NUM_SAMPLES;
+                            const sx0 = x0 + (x1 - x0) * t0;
+                            const sy0 = y0 + (y1 - y0) * t0;
+                            ctx.moveTo(sx0, sy0);
+                            ctx.lineTo(x1, y1);
                         }
                     }
                     
