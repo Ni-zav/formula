@@ -1,7 +1,10 @@
 const BACKGROUND = "#101010";
 const FOREGROUND = "#50FF50";
+const WIREFRAME_COLOR = "#2a7a2a";     // Darkened wireframe lines
 const FACE_COLOR = "#0a2a0a"; // Solid face fill color (dark green for consistency)
 const FACE_ALPHA = 0.3;       // Opacity for transparent solid mode (0-1)
+const TRANSPARENT_FACE_COLOR = "#1a5a1a"; // Darker green for transparent faces
+const TRANSPARENT_FACE_ALPHA = 0.25;   // Slightly darker transparent faces
 
 // ============================================
 // CAMERA SETTINGS (can be modified via UI)
@@ -37,7 +40,8 @@ const CAMERA = {
     render: {
         mode: 'wireframe',     // 'wireframe' or 'solid'
         solidType: 'opaque',   // 'transparent' (stacking) or 'opaque' (depth-sorted)
-        showEdges: true        // Show wireframe edges on solid mode
+        showEdges: true,       // Show wireframe edges on solid mode
+        showSilhouette: true   // Show silhouette/outline in all modes
     },
     
     // Backface Culling settings (hides faces facing away based on winding order)
@@ -81,6 +85,7 @@ const depthThresholdBox = document.getElementById('depth-threshold-box');
 const renderModeToggle = document.getElementById('render-mode-toggle');
 const showEdgesToggle = document.getElementById('show-edges-toggle');
 const solidTypeToggle = document.getElementById('solid-type-toggle');
+const showSilhouetteToggle = document.getElementById('show-silhouette-toggle');
 
 // Control containers for scroll support
 const zoomBox = document.getElementById('zoom-box');
@@ -811,6 +816,14 @@ if (solidTypeToggle) {
     });
 }
 
+if (showSilhouetteToggle) {
+    showSilhouetteToggle.addEventListener('click', () => {
+        CAMERA.render.showSilhouette = !CAMERA.render.showSilhouette;
+        showSilhouetteToggle.classList.toggle('active', CAMERA.render.showSilhouette);
+        showSilhouetteToggle.textContent = CAMERA.render.showSilhouette ? 'Silhouette' : 'No Sil';
+    });
+}
+
 // Initialize render mode UI
 updateRenderModeUI();
 
@@ -1408,8 +1421,8 @@ function frame() {
             if (isTransparent) {
                 // TRANSPARENT MODE: Semi-transparent faces that stack
                 // MUST use per-face fill() for proper alpha blending of overlapping faces
-                ctx.globalAlpha = FACE_ALPHA;
-                ctx.fillStyle = FOREGROUND;
+                ctx.globalAlpha = TRANSPARENT_FACE_ALPHA;
+                ctx.fillStyle = TRANSPARENT_FACE_COLOR;
                 
                 // Cache array references for hot loop
                 const fOffsets = faceOffsets;
@@ -1572,7 +1585,7 @@ function frame() {
             }
         } else if ((CAMERA.backfaceCull.enabled || CAMERA.depthCull.enabled) && faceCount > 0) {
             // WIREFRAME MODE with Culling
-            ctx.strokeStyle = FOREGROUND;
+            ctx.strokeStyle = WIREFRAME_COLOR;
             ctx.lineWidth = 0.3;
             
             const useBackfaceCull = CAMERA.backfaceCull.enabled;
@@ -1625,7 +1638,7 @@ function frame() {
             ctx.stroke();
         } else {
             // WIREFRAME MODE without Z-Culling
-            ctx.strokeStyle = FOREGROUND;
+            ctx.strokeStyle = WIREFRAME_COLOR;
             ctx.lineWidth = 0.3;
             ctx.beginPath();
             
@@ -1640,6 +1653,40 @@ function frame() {
                 ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
             }
             
+            ctx.stroke();
+        }
+        
+        // Draw silhouettes in all modes if enabled
+        if (CAMERA.render.showSilhouette && faceCount > 0) {
+            ctx.beginPath();
+            
+            const edgeLen = edges.length;
+            
+            for (let i = 0; i < edgeLen; i++) {
+                const adjacentFaces = edgeToFaces[i];
+                
+                if (adjacentFaces.length === 1) {
+                    // Boundary edge
+                    const edge = edges[i];
+                    ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
+                    ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                } else if (adjacentFaces.length === 2) {
+                    // Silhouette edge (one front, one back facing)
+                    const face1 = adjacentFaces[0];
+                    const face2 = adjacentFaces[1];
+                    const isFront1 = isFaceFrontFacing(face1);
+                    const isFront2 = isFaceFrontFacing(face2);
+                    
+                    if (isFront1 !== isFront2) {
+                        const edge = edges[i];
+                        ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
+                        ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                    }
+                }
+            }
+            
+            ctx.strokeStyle = FOREGROUND;
+            ctx.lineWidth = 0.5;
             ctx.stroke();
         }
     } else {
