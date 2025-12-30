@@ -904,6 +904,34 @@ document.addEventListener('mouseup', () => {
 game.style.cursor = 'grab';
 
 // ============================================
+// Canvas scroll zoom
+// ============================================
+game.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    
+    const step = 0.1;
+    const min = 0.2;
+    const max = 3.0;
+    
+    // Get current zoom for active mode
+    let currentZoom = CAMERA.type === 'perspective' ? CAMERA.perspectiveZoom : CAMERA.orthoZoom;
+    
+    // Scroll up = zoom in, scroll down = zoom out
+    let newZoom = currentZoom + (e.deltaY < 0 ? step : -step);
+    newZoom = Math.max(min, Math.min(max, newZoom));
+    
+    // Update camera and slider
+    if (CAMERA.type === 'perspective') {
+        CAMERA.perspectiveZoom = newZoom;
+    } else {
+        CAMERA.orthoZoom = newZoom;
+    }
+    
+    zoomSlider.value = newZoom;
+    zoomValue.textContent = `${newZoom.toFixed(1)}x`;
+}, { passive: false });
+
+// ============================================
 // Derived camera values
 // ============================================
 function getFocalScale() {
