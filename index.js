@@ -1096,10 +1096,10 @@ function isFaceFrontFacing(faceIdx) {
     const x2 = transformedX[v2], y2 = transformedY[v2];
     
     // Signed area (2D cross product)
-    // In Canvas2D with Y-down, negative = front-facing (CCW in world becomes CW on screen)
+    // Positive = front-facing, Negative = back-facing
     const signedArea = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
     
-    return signedArea < 0;
+    return signedArea > 0;
 }
 
 function frame() {
@@ -1131,8 +1131,15 @@ function frame() {
                 ctx.globalAlpha = FACE_ALPHA;
                 ctx.fillStyle = FOREGROUND; // Use green for visibility
                 
+                // Cache visibility for edge drawing later, then draw each face
                 for (let i = 0; i < faceCount; i++) {
-                    if (useZCull && !isFaceFrontFacing(i)) continue;
+                    if (useZCull) {
+                        const vis = isFaceFrontFacing(i);
+                        faceVisible[i] = vis ? 1 : 0;
+                        if (!vis) continue;
+                    } else {
+                        faceVisible[i] = 1;
+                    }
                     
                     const offset = faceOffsets[i];
                     const len = faceLengths[i];
@@ -1151,39 +1158,50 @@ function frame() {
                 ctx.globalAlpha = 1.0; // Reset alpha
             } else {
                 // OPAQUE MODE: Draw solid faces with proper hidden line removal
-                // Each face draws fill + stroke together so front faces cover back edges
                 ctx.fillStyle = FACE_COLOR;
                 ctx.strokeStyle = FOREGROUND;
                 ctx.lineWidth = 0.3;
                 
                 const showEdges = CAMERA.render.showEdges;
                 
-                if (useZCull) {
-                    // Z-CULL ON: Draw front-facing faces with depth sorting
-                    const visibleFaces = [];
-                    
-                    for (let i = 0; i < faceCount; i++) {
-                        if (!isFaceFrontFacing(i)) continue;
-                        
-                        const offset = faceOffsets[i];
-                        const len = faceLengths[i];
-                        
-                        // Calculate average Z
-                        let avgZ = 0;
-                        for (let j = 0; j < len; j++) {
-                            avgZ += transformedZ[faceIndices[offset + j]];
-                        }
-                        avgZ /= len;
-                        
-                        visibleFaces.push({ idx: i, avgZ: avgZ });
+                // Calculate avgZ and visibility for all faces
+                let visibleCount = 0;
+                
+                for (let i = 0; i < faceCount; i++) {
+                    // Check visibility if z-culling enabled
+                    if (useZCull) {
+                        const isFront = isFaceFrontFacing(i);
+                        faceVisible[i] = isFront ? 1 : 0;
+                        if (!isFront) continue;
+                    } else {
+                        faceVisible[i] = 1;
                     }
                     
-                    // Sort back-to-front
-                    visibleFaces.sort((a, b) => b.avgZ - a.avgZ);
+                    // Calculate average Z
+                    const offset = faceOffsets[i];
+                    const len = faceLengths[i];
+                    let avgZ = 0;
+                    for (let j = 0; j < len; j++) {
+                        avgZ += transformedZ[faceIndices[offset + j]];
+                    }
+                    faceAvgZ[i] = avgZ / len;
                     
-                    // Draw faces with fill+stroke together (so front faces cover back edges)
-                    for (const face of visibleFaces) {
-                        const i = face.idx;
+                    faceSortIndices[visibleCount++] = i;
+                }
+                
+                // Quick sort for better performance with many faces
+                // Using native sort on a view of the array
+                const sortView = faceSortIndices.subarray(0, visibleCount);
+                const tempSort = Array.from(sortView);
+                tempSort.sort((a, b) => faceAvgZ[b] - faceAvgZ[a]);
+                for (let i = 0; i < visibleCount; i++) {
+                    faceSortIndices[i] = tempSort[i];
+                }
+                
+                if (showEdges) {
+                    // With edges: Must draw each face separately for proper occlusion
+                    for (let s = 0; s < visibleCount; s++) {
+                        const i = faceSortIndices[s];
                         const offset = faceOffsets[i];
                         const len = faceLengths[i];
                         
@@ -1196,32 +1214,12 @@ function frame() {
                         }
                         ctx.closePath();
                         ctx.fill();
-                        if (showEdges) ctx.stroke();
+                        ctx.stroke();
                     }
                 } else {
-                    // Z-CULL OFF: Draw all faces with depth sorting
-                    const visibleFaces = [];
-                    
-                    for (let i = 0; i < faceCount; i++) {
-                        const offset = faceOffsets[i];
-                        const len = faceLengths[i];
-                        
-                        // Calculate average Z
-                        let avgZ = 0;
-                        for (let j = 0; j < len; j++) {
-                            avgZ += transformedZ[faceIndices[offset + j]];
-                        }
-                        avgZ /= len;
-                        
-                        visibleFaces.push({ idx: i, avgZ: avgZ });
-                    }
-                    
-                    // Sort back-to-front
-                    visibleFaces.sort((a, b) => b.avgZ - a.avgZ);
-                    
-                    // Draw faces with fill+stroke together
-                    for (const face of visibleFaces) {
-                        const i = face.idx;
+                    // No edges: Still need per-face drawing due to Canvas fill rule issues
+                    for (let s = 0; s < visibleCount; s++) {
+                        const i = faceSortIndices[s];
                         const offset = faceOffsets[i];
                         const len = faceLengths[i];
                         
@@ -1234,7 +1232,6 @@ function frame() {
                         }
                         ctx.closePath();
                         ctx.fill();
-                        if (showEdges) ctx.stroke();
                     }
                 }
             }
@@ -1243,30 +1240,20 @@ function frame() {
             if (isTransparent && CAMERA.render.showEdges) {
                 ctx.beginPath();
                 
-                if (useZCull) {
-                    // Draw edges of front-facing faces only
-                    const edgeLen = edges.length;
-                    for (let i = 0; i < edgeLen; i++) {
-                        const adjacentFaces = edgeToFaces[i];
-                        let edgeVisible = false;
-                        
-                        for (let j = 0; j < adjacentFaces.length; j++) {
-                            if (isFaceFrontFacing(adjacentFaces[j])) {
-                                edgeVisible = true;
-                                break;
-                            }
-                        }
-                        
-                        if (edgeVisible) {
-                            const edge = edges[i];
-                            ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
-                            ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                // Use cached faceVisible for edge visibility
+                const edgeLen = edges.length;
+                for (let i = 0; i < edgeLen; i++) {
+                    const adjacentFaces = edgeToFaces[i];
+                    let edgeVisible = false;
+                    
+                    for (let j = 0; j < adjacentFaces.length; j++) {
+                        if (faceVisible[adjacentFaces[j]]) {
+                            edgeVisible = true;
+                            break;
                         }
                     }
-                } else {
-                    // Draw all edges
-                    const edgeLen = edges.length;
-                    for (let i = 0; i < edgeLen; i++) {
+                    
+                    if (edgeVisible) {
                         const edge = edges[i];
                         ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
                         ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
@@ -1279,6 +1266,12 @@ function frame() {
             // WIREFRAME MODE with Z-Culling
             ctx.strokeStyle = FOREGROUND;
             ctx.lineWidth = 0.3;
+            
+            // Cache face visibility first
+            for (let i = 0; i < faceCount; i++) {
+                faceVisible[i] = isFaceFrontFacing(i) ? 1 : 0;
+            }
+            
             ctx.beginPath();
             
             const edgeLen = edges.length;
@@ -1287,7 +1280,7 @@ function frame() {
                 let edgeVisible = false;
                 
                 for (let j = 0; j < adjacentFaces.length; j++) {
-                    if (isFaceFrontFacing(adjacentFaces[j])) {
+                    if (faceVisible[adjacentFaces[j]]) {
                         edgeVisible = true;
                         break;
                     }
