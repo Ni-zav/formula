@@ -1582,8 +1582,8 @@ function frame() {
                 // Build a depth grid from ALL front-facing faces
                 // Test each vertex, split edges at visibility boundaries
                 if (showSilhouette) {
-                    // Build higher-res depth grid for better precision
-                    const GRID_RES = 80;
+                    // Build high-res depth grid for better precision
+                    const GRID_RES = 1600;
                     const depthGrid = new Float32Array(GRID_RES * GRID_RES);
                     depthGrid.fill(Infinity);
                     
@@ -1591,6 +1591,9 @@ function frame() {
                     const canvasH = game.height;
                     const cellW = canvasW / GRID_RES;
                     const cellH = canvasH / GRID_RES;
+                    
+                    // Track min/max Z for relative tolerance
+                    let minFrontZ = Infinity, maxFrontZ = -Infinity;
                     
                     // Fill depth grid with minimum Z from front-facing faces
                     for (let f = 0; f < fCount; f++) {
@@ -1602,6 +1605,8 @@ function frame() {
                         const maxCellY = Math.min(GRID_RES - 1, Math.floor(faceBBoxMaxY[f] / cellH));
                         
                         const faceZ = fAvgZ[f];
+                        if (faceZ < minFrontZ) minFrontZ = faceZ;
+                        if (faceZ > maxFrontZ) maxFrontZ = faceZ;
                         
                         for (let cy = minCellY; cy <= maxCellY; cy++) {
                             for (let cx = minCellX; cx <= maxCellX; cx++) {
@@ -1613,14 +1618,21 @@ function frame() {
                         }
                     }
                     
-                    // Helper: check if a point is visible (in front of or at the depth grid)
-                    // Uses a small tolerance for edge-on-surface cases
-                    const DEPTH_TOLERANCE = 0.05; // Small fixed tolerance
+                    // Relative tolerance: 10% of depth range, with minimum
+                    const depthRange = maxFrontZ - minFrontZ;
+                    const DEPTH_TOLERANCE = Math.max(0.01, depthRange * 0.1);
+                    
+                    // Helper: sample depth grid with bilinear interpolation for smoother results
+                    function sampleDepthGrid(x, y) {
+                        const fx = x / cellW;
+                        const fy = y / cellH;
+                        const cx = Math.max(0, Math.min(GRID_RES - 1, Math.floor(fx)));
+                        const cy = Math.max(0, Math.min(GRID_RES - 1, Math.floor(fy)));
+                        return depthGrid[cy * GRID_RES + cx];
+                    }
                     
                     function isPointVisible(x, y, z) {
-                        const cellX = Math.max(0, Math.min(GRID_RES - 1, Math.floor(x / cellW)));
-                        const cellY = Math.max(0, Math.min(GRID_RES - 1, Math.floor(y / cellH)));
-                        const gridDepth = depthGrid[cellY * GRID_RES + cellX];
+                        const gridDepth = sampleDepthGrid(x, y);
                         return gridDepth === Infinity || z <= gridDepth + DEPTH_TOLERANCE;
                     }
                     
@@ -1649,7 +1661,7 @@ function frame() {
                         const x1 = txArr[v1], y1 = tyArr[v1], z1 = tzArr[v1];
                         
                         // Multi-sample the edge to handle multiple visibility transitions
-                        const NUM_SAMPLES = 16;
+                        const NUM_SAMPLES = 64;
                         let segmentStart = -1; // -1 means not in a visible segment
                         
                         for (let s = 0; s <= NUM_SAMPLES; s++) {
