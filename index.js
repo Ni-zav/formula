@@ -1579,11 +1579,11 @@ function frame() {
                 }
                 
                 // Draw silhouettes with depth-map based occlusion and edge splitting
-                // Build a depth grid from ALL front-facing faces
-                // Test each vertex, split edges at visibility boundaries
+                // Build a depth grid from ALL front-facing faces using TRIANGLE RASTERIZATION
+                // This eliminates squared artifacts from bounding-box based approach
                 if (showSilhouette) {
                     // Build high-res depth grid for better precision
-                    const GRID_RES = 1600;
+                    const GRID_RES = 800;
                     const depthGrid = new Float32Array(GRID_RES * GRID_RES);
                     depthGrid.fill(Infinity);
                     
@@ -1595,24 +1595,68 @@ function frame() {
                     // Track min/max Z for relative tolerance
                     let minFrontZ = Infinity, maxFrontZ = -Infinity;
                     
-                    // Fill depth grid with minimum Z from front-facing faces
+                    // Edge function for triangle rasterization
+                    // Returns positive if point (px, py) is on the left side of edge from (x0, y0) to (x1, y1)
+                    function edgeFunc(x0, y0, x1, y1, px, py) {
+                        return (px - x0) * (y1 - y0) - (py - y0) * (x1 - x0);
+                    }
+                    
+                    // Fill depth grid with minimum Z from front-facing faces using triangle rasterization
                     for (let f = 0; f < fCount; f++) {
                         if (!fIsFront[f]) continue;
                         
-                        const minCellX = Math.max(0, Math.floor(faceBBoxMinX[f] / cellW));
-                        const maxCellX = Math.min(GRID_RES - 1, Math.floor(faceBBoxMaxX[f] / cellW));
-                        const minCellY = Math.max(0, Math.floor(faceBBoxMinY[f] / cellH));
-                        const maxCellY = Math.min(GRID_RES - 1, Math.floor(faceBBoxMaxY[f] / cellH));
+                        const offset = fOffsets[f];
+                        const len = fLengths[f];
+                        if (len < 3) continue;
                         
                         const faceZ = fAvgZ[f];
                         if (faceZ < minFrontZ) minFrontZ = faceZ;
                         if (faceZ > maxFrontZ) maxFrontZ = faceZ;
                         
-                        for (let cy = minCellY; cy <= maxCellY; cy++) {
-                            for (let cx = minCellX; cx <= maxCellX; cx++) {
-                                const idx = cy * GRID_RES + cx;
-                                if (faceZ < depthGrid[idx]) {
-                                    depthGrid[idx] = faceZ;
+                        // For triangles, use fast edge-function rasterization
+                        // For n-gons, triangulate from first vertex (fan triangulation)
+                        for (let tri = 0; tri < len - 2; tri++) {
+                            // Triangle vertices: 0, tri+1, tri+2 (fan from vertex 0)
+                            const v0 = fIndices[offset];
+                            const v1 = fIndices[offset + tri + 1];
+                            const v2 = fIndices[offset + tri + 2];
+                            
+                            // Screen coordinates of triangle vertices
+                            const x0 = txArr[v0], y0 = tyArr[v0];
+                            const x1 = txArr[v1], y1 = tyArr[v1];
+                            const x2 = txArr[v2], y2 = tyArr[v2];
+                            
+                            // Compute bounding box in grid coordinates
+                            const minGX = Math.max(0, Math.floor(Math.min(x0, x1, x2) / cellW));
+                            const maxGX = Math.min(GRID_RES - 1, Math.floor(Math.max(x0, x1, x2) / cellW));
+                            const minGY = Math.max(0, Math.floor(Math.min(y0, y1, y2) / cellH));
+                            const maxGY = Math.min(GRID_RES - 1, Math.floor(Math.max(y0, y1, y2) / cellH));
+                            
+                            // Skip if bounding box is empty
+                            if (minGX > maxGX || minGY > maxGY) continue;
+                            
+                            // Rasterize triangle using edge functions
+                            // A point is inside if all three edge functions have the same sign
+                            for (let gy = minGY; gy <= maxGY; gy++) {
+                                const py = (gy + 0.5) * cellH; // Center of grid cell
+                                for (let gx = minGX; gx <= maxGX; gx++) {
+                                    const px = (gx + 0.5) * cellW; // Center of grid cell
+                                    
+                                    // Compute edge functions
+                                    const e0 = edgeFunc(x0, y0, x1, y1, px, py);
+                                    const e1 = edgeFunc(x1, y1, x2, y2, px, py);
+                                    const e2 = edgeFunc(x2, y2, x0, y0, px, py);
+                                    
+                                    // Point is inside triangle if all edge functions have same sign (>= 0 or all <= 0)
+                                    // Using >= 0 for CCW winding, but we need to handle both windings
+                                    const inside = (e0 >= 0 && e1 >= 0 && e2 >= 0) || (e0 <= 0 && e1 <= 0 && e2 <= 0);
+                                    
+                                    if (inside) {
+                                        const idx = gy * GRID_RES + gx;
+                                        if (faceZ < depthGrid[idx]) {
+                                            depthGrid[idx] = faceZ;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1661,7 +1705,7 @@ function frame() {
                         const x1 = txArr[v1], y1 = tyArr[v1], z1 = tzArr[v1];
                         
                         // Multi-sample the edge to handle multiple visibility transitions
-                        const NUM_SAMPLES = 64;
+                        const NUM_SAMPLES = 32;
                         let segmentStart = -1; // -1 means not in a visible segment
                         
                         for (let s = 0; s <= NUM_SAMPLES; s++) {
