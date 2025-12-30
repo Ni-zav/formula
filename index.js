@@ -814,7 +814,6 @@ if (solidTypeToggle) {
 // Initialize render mode UI
 updateRenderModeUI();
 
-
 // ============================================
 // Initialize sliders to match CAMERA defaults
 // ============================================
@@ -1191,6 +1190,40 @@ const halfWidth = game.width / 2;
 const halfHeight = game.height / 2;
 
 // ============================================
+// Performance Optimizations
+// ============================================
+
+// Pre-computed constants
+const DEG_TO_RAD = Math.PI / 180;
+const RAD_TO_DEG = 180 / Math.PI;
+const TWO_PI = Math.PI * 2;
+const ANGLE_STEP = Math.PI / 60;
+
+// Fast in-place quicksort for depth sorting (avoids callback overhead)
+function quickSortDepth(indices, depths, left, right) {
+    if (left >= right) return;
+    
+    const pivotIdx = indices[(left + right) >> 1];
+    const pivot = depths[pivotIdx];
+    let i = left, j = right;
+    
+    while (i <= j) {
+        while (depths[indices[i]] > pivot) i++;
+        while (depths[indices[j]] < pivot) j--;
+        if (i <= j) {
+            const tmp = indices[i];
+            indices[i] = indices[j];
+            indices[j] = tmp;
+            i++;
+            j--;
+        }
+    }
+    
+    if (left < j) quickSortDepth(indices, depths, left, j);
+    if (i < right) quickSortDepth(indices, depths, i, right);
+}
+
+// ============================================
 // Render functions
 // ============================================
 
@@ -1204,7 +1237,7 @@ function transformAllVertices(angle, dz) {
     const sinY = Math.sin(angle);
     
     // Pitch rotation (around X axis) - negate so positive = looking from above
-    const pitchRad = -CAMERA.pitch * Math.PI / 180;
+    const pitchRad = -CAMERA.pitch * DEG_TO_RAD;
     const cosX = Math.cos(pitchRad);
     const sinX = Math.sin(pitchRad);
     
@@ -1212,49 +1245,70 @@ function transformAllVertices(angle, dz) {
     const isPerspective = CAMERA.type === "perspective";
     const zoom = isPerspective ? CAMERA.perspectiveZoom : CAMERA.orthoZoom;
     
-    // Calculate model center Z as average of all vertex Z values
+    // Cache typed array references and constants for hot loop
+    const vsF = vsFlat;
+    const txArr = transformedX;
+    const tyArr = transformedY;
+    const tzArr = transformedZ;
+    const hw = halfWidth;
+    const hh = halfHeight;
+    const vCount = vertexCount;
+    const focalZoom = focalScale * zoom;
+    
     let sumZ = 0;
     
-    for (let i = 0; i < vertexCount; i++) {
-        const idx = i * 3;
-        const x = vsFlat[idx];
-        const y = vsFlat[idx + 1];
-        const z = vsFlat[idx + 2];
-        
-        // Rotate around Y axis (horizontal spin)
-        const rx = x * cosY - z * sinY;
-        const rz = x * sinY + z * cosY;
-        
-        // Rotate around X axis (pitch/elevation)
-        const ry = y * cosX - rz * sinX;
-        const rz2 = y * sinX + rz * cosX;
-        
-        // Translate Z
-        const tz = rz2 + dz;
-        
-        // Store the transformed Z for culling calculations
-        transformedZ[i] = tz;
-        sumZ += tz;
-        
-        let px, py;
-        
-        if (isPerspective) {
+    if (isPerspective) {
+        // Perspective projection loop
+        for (let i = 0, idx = 0; i < vCount; i++, idx += 3) {
+            const x = vsF[idx];
+            const y = vsF[idx + 1];
+            const z = vsF[idx + 2];
+            
+            // Rotate around Y axis (horizontal spin)
+            const rx = x * cosY - z * sinY;
+            const rz = x * sinY + z * cosY;
+            
+            // Rotate around X axis (pitch/elevation)
+            const ry = y * cosX - rz * sinX;
+            const tz = y * sinX + rz * cosX + dz;
+            
+            tzArr[i] = tz;
+            sumZ += tz;
+            
             // Perspective: divide by Z with focal scale + zoom
-            const invZ = (focalScale * zoom) / tz;
-            px = rx * invZ;
-            py = ry * invZ;
-        } else {
-            // Orthographic: no depth effect
-            px = rx * zoom;
-            py = ry * zoom;
+            const invZ = focalZoom / tz;
+            txArr[i] = rx * invZ * hw + hw;
+            tyArr[i] = -ry * invZ * hh + hh;
         }
+    } else {
+        // Orthographic projection loop
+        const zoomHW = zoom * hw;
+        const zoomHH = zoom * hh;
         
-        transformedX[i] = px * halfWidth + halfWidth;
-        transformedY[i] = -py * halfHeight + halfHeight;
+        for (let i = 0, idx = 0; i < vCount; i++, idx += 3) {
+            const x = vsF[idx];
+            const y = vsF[idx + 1];
+            const z = vsF[idx + 2];
+            
+            // Rotate around Y axis (horizontal spin)
+            const rx = x * cosY - z * sinY;
+            const rz = x * sinY + z * cosY;
+            
+            // Rotate around X axis (pitch/elevation)
+            const ry = y * cosX - rz * sinX;
+            const tz = y * sinX + rz * cosX + dz;
+            
+            tzArr[i] = tz;
+            sumZ += tz;
+            
+            // Orthographic: no depth effect
+            txArr[i] = rx * zoomHW + hw;
+            tyArr[i] = -ry * zoomHH + hh;
+        }
     }
     
     // Update cached model center Z for backface culling
-    modelCenterZ = sumZ / vertexCount;
+    modelCenterZ = sumZ / vCount;
 }
 
 let angle = 0;
@@ -1322,11 +1376,12 @@ function frame() {
         lastTime = now;
     }
     
-    angle += (Math.PI / 60) * CAMERA.rotationSpeed;
+    const rotSpeed = CAMERA.rotationSpeed;
+    angle += ANGLE_STEP * rotSpeed;
     
     // Wrap angle to 0-2*PI range
-    if (angle >= 2 * Math.PI) angle -= 2 * Math.PI;
-    if (angle < 0) angle += 2 * Math.PI;
+    if (angle >= TWO_PI) angle -= TWO_PI;
+    else if (angle < 0) angle += TWO_PI;
     
     // Update rotation slider to follow animation (when speed > 0)
     if (CAMERA.rotationSpeed !== 0) {
@@ -1355,43 +1410,50 @@ function frame() {
                 ctx.globalAlpha = FACE_ALPHA;
                 ctx.fillStyle = FOREGROUND; // Use green for visibility
                 
+                // Cache array references for hot loop
+                const fOffsets = faceOffsets;
+                const fLengths = faceLengths;
+                const fIndices = faceIndices;
+                const txArr = transformedX;
+                const tyArr = transformedY;
+                const fVisible = faceVisible;
+                const fCount = faceCount;
+                
                 // Cache visibility for edge drawing later, then draw each face
-                for (let i = 0; i < faceCount; i++) {
-                    let visible = true;
-                    
+                for (let i = 0; i < fCount; i++) {
                     // Backface culling: check winding order
                     if (useBackfaceCull && !isFaceFrontFacing(i)) {
-                        visible = false;
+                        fVisible[i] = 0;
+                        continue;
                     }
                     // Depth culling: check if behind model center
-                    if (visible && useDepthCull && !isFaceVisible(i)) {
-                        visible = false;
+                    if (useDepthCull && !isFaceVisible(i)) {
+                        fVisible[i] = 0;
+                        continue;
                     }
                     
-                    faceVisible[i] = visible ? 1 : 0;
-                    if (!visible) continue;
+                    fVisible[i] = 1;
                     
-                    const offset = faceOffsets[i];
-                    const len = faceLengths[i];
+                    const offset = fOffsets[i];
+                    const len = fLengths[i];
                     
                     // Skip tiny faces (< 2x2 pixels)
-                    const v0 = faceIndices[offset];
-                    let minX = transformedX[v0], maxX = minX;
-                    let minY = transformedY[v0], maxY = minY;
+                    const v0 = fIndices[offset];
+                    let minX = txArr[v0], maxX = minX;
+                    let minY = tyArr[v0], maxY = minY;
                     for (let j = 1; j < len; j++) {
-                        const v = faceIndices[offset + j];
-                        const x = transformedX[v], y = transformedY[v];
+                        const v = fIndices[offset + j];
+                        const x = txArr[v], y = tyArr[v];
                         if (x < minX) minX = x; else if (x > maxX) maxX = x;
                         if (y < minY) minY = y; else if (y > maxY) maxY = y;
                     }
                     if ((maxX - minX) < 2 && (maxY - minY) < 2) continue;
                     
                     ctx.beginPath();
-                    const firstVert = faceIndices[offset];
-                    ctx.moveTo(transformedX[firstVert], transformedY[firstVert]);
+                    ctx.moveTo(txArr[v0], tyArr[v0]);
                     for (let j = 1; j < len; j++) {
-                        const vert = faceIndices[offset + j];
-                        ctx.lineTo(transformedX[vert], transformedY[vert]);
+                        const vert = fIndices[offset + j];
+                        ctx.lineTo(txArr[vert], tyArr[vert]);
                     }
                     ctx.closePath();
                     ctx.fill();
@@ -1406,53 +1468,65 @@ function frame() {
                 
                 const showEdges = CAMERA.render.showEdges;
                 
+                // Cache array references for hot loop
+                const fOffsets = faceOffsets;
+                const fLengths = faceLengths;
+                const fIndices = faceIndices;
+                const txArr = transformedX;
+                const tyArr = transformedY;
+                const tzArr = transformedZ;
+                const fAvgZ = faceAvgZ;
+                const fVisible = faceVisible;
+                const fSortIdx = faceSortIndices;
+                const fCount = faceCount;
+                
                 // Calculate avgZ and visibility for all faces
                 let visibleCount = 0;
                 
-                for (let i = 0; i < faceCount; i++) {
-                    let visible = true;
-                    
+                for (let i = 0; i < fCount; i++) {
                     // Backface culling: check winding order (only if toggle is on)
                     if (useBackfaceCull && !isFaceFrontFacing(i)) {
-                        visible = false;
+                        fVisible[i] = 0;
+                        continue;
                     }
                     // Depth culling: check if behind model center (only if toggle is on)
-                    if (visible && useDepthCull && !isFaceVisible(i)) {
-                        visible = false;
+                    if (useDepthCull && !isFaceVisible(i)) {
+                        fVisible[i] = 0;
+                        continue;
                     }
                     
-                    faceVisible[i] = visible ? 1 : 0;
-                    if (!visible) continue;
+                    fVisible[i] = 1;
                     
-                    const offset = faceOffsets[i];
-                    const len = faceLengths[i];
+                    const offset = fOffsets[i];
+                    const len = fLengths[i];
                     
-                    // Calculate average Z
+                    // Calculate average Z inline
                     let avgZ = 0;
                     for (let j = 0; j < len; j++) {
-                        avgZ += transformedZ[faceIndices[offset + j]];
+                        avgZ += tzArr[fIndices[offset + j]];
                     }
                     
-                    faceAvgZ[i] = avgZ / len;
-                    faceSortIndices[visibleCount++] = i;
+                    fAvgZ[i] = avgZ / len;
+                    fSortIdx[visibleCount++] = i;
                 }
                 
-                // Sort visible faces by depth (back-to-front)
-                // Use native sort on the subarray view - this is fast and in-place (no allocations)
-                faceSortIndices.subarray(0, visibleCount).sort((a, b) => faceAvgZ[b] - faceAvgZ[a]);
+                // Sort visible faces by depth (back-to-front) using optimized quicksort
+                if (visibleCount > 1) {
+                    quickSortDepth(fSortIdx, fAvgZ, 0, visibleCount - 1);
+                }
                 
                 // Draw faces back-to-front
                 for (let s = 0; s < visibleCount; s++) {
-                    const i = faceSortIndices[s];
-                    const offset = faceOffsets[i];
-                    const len = faceLengths[i];
+                    const i = fSortIdx[s];
+                    const offset = fOffsets[i];
+                    const len = fLengths[i];
                     
                     ctx.beginPath();
-                    const firstVert = faceIndices[offset];
-                    ctx.moveTo(transformedX[firstVert], transformedY[firstVert]);
+                    const firstVert = fIndices[offset];
+                    ctx.moveTo(txArr[firstVert], tyArr[firstVert]);
                     for (let j = 1; j < len; j++) {
-                        const vert = faceIndices[offset + j];
-                        ctx.lineTo(transformedX[vert], transformedY[vert]);
+                        const vert = fIndices[offset + j];
+                        ctx.lineTo(txArr[vert], tyArr[vert]);
                     }
                     ctx.closePath();
                     ctx.fill();
@@ -1465,22 +1539,29 @@ function frame() {
                 ctx.beginPath();
                 
                 // Use cached faceVisible for edge visibility
-                const edgeLen = edges.length;
+                const edgeArr = edges;
+                const edgeLen = edgeArr.length;
+                const e2f = edgeToFaces;
+                const fVisible = faceVisible;
+                const txArr = transformedX;
+                const tyArr = transformedY;
+                
                 for (let i = 0; i < edgeLen; i++) {
-                    const adjacentFaces = edgeToFaces[i];
-                    let edgeVisible = false;
+                    const adjacentFaces = e2f[i];
+                    const adjLen = adjacentFaces.length;
+                    let edgeVis = false;
                     
-                    for (let j = 0; j < adjacentFaces.length; j++) {
-                        if (faceVisible[adjacentFaces[j]]) {
-                            edgeVisible = true;
+                    for (let j = 0; j < adjLen; j++) {
+                        if (fVisible[adjacentFaces[j]]) {
+                            edgeVis = true;
                             break;
                         }
                     }
                     
-                    if (edgeVisible) {
-                        const edge = edges[i];
-                        ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
-                        ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                    if (edgeVis) {
+                        const edge = edgeArr[i];
+                        ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
+                        ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
                     }
                 }
                 
@@ -1493,41 +1574,48 @@ function frame() {
             
             const useBackfaceCull = CAMERA.backfaceCull.enabled;
             const useDepthCull = CAMERA.depthCull.enabled;
+            const fVisible = faceVisible;
+            const fCount = faceCount;
             
             // Cache face visibility first
-            for (let i = 0; i < faceCount; i++) {
-                let visible = true;
-                
+            for (let i = 0; i < fCount; i++) {
                 // Backface culling: check winding order
                 if (useBackfaceCull && !isFaceFrontFacing(i)) {
-                    visible = false;
+                    fVisible[i] = 0;
+                    continue;
                 }
                 // Depth culling: check if behind model center
-                if (visible && useDepthCull && !isFaceVisible(i)) {
-                    visible = false;
+                if (useDepthCull && !isFaceVisible(i)) {
+                    fVisible[i] = 0;
+                    continue;
                 }
-                
-                faceVisible[i] = visible ? 1 : 0;
+                fVisible[i] = 1;
             }
             
             ctx.beginPath();
             
-            const edgeLen = edges.length;
+            const edgeArr = edges;
+            const edgeLen = edgeArr.length;
+            const e2f = edgeToFaces;
+            const txArr = transformedX;
+            const tyArr = transformedY;
+            
             for (let i = 0; i < edgeLen; i++) {
-                const adjacentFaces = edgeToFaces[i];
-                let edgeVisible = false;
+                const adjacentFaces = e2f[i];
+                const adjLen = adjacentFaces.length;
+                let edgeVis = false;
                 
-                for (let j = 0; j < adjacentFaces.length; j++) {
-                    if (faceVisible[adjacentFaces[j]]) {
-                        edgeVisible = true;
+                for (let j = 0; j < adjLen; j++) {
+                    if (fVisible[adjacentFaces[j]]) {
+                        edgeVis = true;
                         break;
                     }
                 }
                 
-                if (edgeVisible) {
-                    const edge = edges[i];
-                    ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
-                    ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                if (edgeVis) {
+                    const edge = edgeArr[i];
+                    ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
+                    ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
                 }
             }
             
@@ -1538,11 +1626,15 @@ function frame() {
             ctx.lineWidth = 0.3;
             ctx.beginPath();
             
-            const edgeLen = edges.length;
+            const edgeArr = edges;
+            const edgeLen = edgeArr.length;
+            const txArr = transformedX;
+            const tyArr = transformedY;
+            
             for (let i = 0; i < edgeLen; i++) {
-                const edge = edges[i];
-                ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
-                ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+                const edge = edgeArr[i];
+                ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
+                ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
             }
             
             ctx.stroke();
