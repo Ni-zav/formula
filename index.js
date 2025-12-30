@@ -982,6 +982,14 @@ let edgeVisibility = null;   // Pre-allocated edge visibility (Uint8Array)
 let edgeToFaces = null;      // Map edge index -> [faceIndex1, faceIndex2, ...]
 let minVisibleFaceZ = Infinity; // Track minimum Z of rendered faces for silhouette culling
 
+// Performance Optimization: Reusable global buffers to avoid per-frame allocation
+let faceBBoxMinX = null;
+let faceBBoxMaxX = null;
+let faceBBoxMinY = null;
+let faceBBoxMaxY = null;
+const GRID_RES = 800; // Resolution for silhouette depth grid
+let depthGrid = null; // Reusable depth grid buffer
+
 // Global model data (will be populated when a model is loaded)
 let vs = null;
 let fs = null;
@@ -1050,6 +1058,20 @@ function initModel() {
     faceIsFrontFacing = new Uint8Array(faceCount);
     faceSortIndices = new Uint32Array(faceCount);
     edgeVisibility = new Uint8Array(edges.length);
+    
+    // Performance Optimization: Reusable face bounds arrays (limit GC)
+    // Only re-allocate if the new model is larger than current capacity
+    if (!faceBBoxMinX || faceBBoxMinX.length < faceCount) {
+        faceBBoxMinX = new Float32Array(faceCount);
+        faceBBoxMaxX = new Float32Array(faceCount);
+        faceBBoxMinY = new Float32Array(faceCount);
+        faceBBoxMaxY = new Float32Array(faceCount);
+    }
+    
+    // Performance Optimization: Reusable depth grid for silhouettes
+    if (!depthGrid) {
+        depthGrid = new Float32Array(GRID_RES * GRID_RES);
+    }
     
     // Build edge-to-faces mapping (which faces share each edge)
     edgeToFaces = new Array(edges.length);
@@ -1433,42 +1455,63 @@ function frame() {
                 const fIndices = faceIndices;
                 const txArr = transformedX;
                 const tyArr = transformedY;
+                const tzArr = transformedZ;
                 const fVisible = faceVisible;
                 const fCount = faceCount;
+                // Pre-calculate threshold Z
+                const thresholdZ = modelCenterZ + CAMERA.depthCull.threshold;
                 
                 // Determine visibility and draw each face individually (for proper alpha stacking)
                 for (let i = 0; i < fCount; i++) {
-                    // Backface culling: check winding order
-                    if (useBackfaceCull && !isFaceFrontFacing(i)) {
-                        fVisible[i] = 0;
-                        continue;
-                    }
-                    // Depth culling: check if behind model center
-                    if (useDepthCull && !isFaceVisible(i)) {
-                        fVisible[i] = 0;
-                        continue;
-                    }
-                    
-                    fVisible[i] = 1;
-                    
                     const offset = fOffsets[i];
                     const len = fLengths[i];
                     const v0 = fIndices[offset];
                     
-                    // Skip tiny faces (< 2x2 pixels)
-                    let minX = txArr[v0], maxX = minX;
-                    let minY = tyArr[v0], maxY = minY;
+                    // 1. INLINED Front Check (Signed Area)
+                    const next1 = fIndices[offset + 1];
+                    const next2 = fIndices[offset + 2];
+                    const x0 = txArr[v0], y0 = tyArr[v0];
+                    const x1 = txArr[next1], y1 = tyArr[next1];
+                    const x2 = txArr[next2], y2 = tyArr[next2];
+                    const signedArea = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+                    const isFront = signedArea > 0;
+                    
+                    if (useBackfaceCull && !isFront) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+                    
+                    // 2. INLINED Depth & Tiny Face Check (Single Pass)
+                    let sumZ = tzArr[v0];
+                    let minX = x0, maxX = x0;
+                    let minY = y0, maxY = y0;
+                    
                     for (let j = 1; j < len; j++) {
                         const v = fIndices[offset + j];
-                        const x = txArr[v], y = tyArr[v];
+                        const x = txArr[v], y = tyArr[v], z = tzArr[v];
+                        sumZ += z;
                         if (x < minX) minX = x; else if (x > maxX) maxX = x;
                         if (y < minY) minY = y; else if (y > maxY) maxY = y;
                     }
-                    if ((maxX - minX) < 2 && (maxY - minY) < 2) continue;
+                    
+                    // Check depth threshold
+                    if (useDepthCull && (sumZ / len) >= thresholdZ) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+                    
+                    // Skip tiny faces (< 2x2 pixels)
+                    if ((maxX - minX) < 2 && (maxY - minY) < 2) {
+                         // Still mark as visible for edges? No, hide tiny faces.
+                         fVisible[i] = 0;
+                         continue;
+                    }
+                    
+                    fVisible[i] = 1;
                     
                     // Draw each face individually so overlapping areas stack alpha
                     ctx.beginPath();
-                    ctx.moveTo(txArr[v0], tyArr[v0]);
+                    ctx.moveTo(x0, y0);
                     for (let j = 1; j < len; j++) {
                         const vert = fIndices[offset + j];
                         ctx.lineTo(txArr[vert], tyArr[vert]);
@@ -1504,45 +1547,47 @@ function frame() {
                 
                 // Pre-compute face bounding boxes and Z for occlusion testing
                 // These are used for ALL front-facing faces (not just visible ones)
-                const faceBBoxMinX = new Float32Array(fCount);
-                const faceBBoxMaxX = new Float32Array(fCount);
-                const faceBBoxMinY = new Float32Array(fCount);
-                const faceBBoxMaxY = new Float32Array(fCount);
+                // NOTE: Globals faceBBoxMinX etc are used (reused) here
                 
                 // Calculate front-facing state and avgZ for ALL faces
                 let visibleCount = 0;
+                const thresholdZ = modelCenterZ + CAMERA.depthCull.threshold;
                 
                 for (let i = 0; i < fCount; i++) {
-                    fIsFront[i] = isFaceFrontFacing(i) ? 1 : 0;
-                    
                     const offset = fOffsets[i];
                     const len = fLengths[i];
+                    const v0 = fIndices[offset];
                     
-                    // Calculate average Z and bounding box for ALL faces
-                    let avgZ = 0;
-                    let minX = Infinity, maxX = -Infinity;
-                    let minY = Infinity, maxY = -Infinity;
+                    // 1. INLINED Front Check
+                    const v1 = fIndices[offset + 1], v2 = fIndices[offset + 2];
+                    const x0 = txArr[v0], y0 = tyArr[v0];
+                    const signedArea = (txArr[v1] - x0) * (tyArr[v2] - y0) - (txArr[v2] - x0) * (tyArr[v1] - y0);
+                    const isFront = signedArea > 0;
+                    fIsFront[i] = isFront ? 1 : 0;
                     
-                    for (let j = 0; j < len; j++) {
-                        const vIdx = fIndices[offset + j];
-                        avgZ += tzArr[vIdx];
-                        const x = txArr[vIdx], y = tyArr[vIdx];
-                        if (x < minX) minX = x; if (x > maxX) maxX = x;
-                        if (y < minY) minY = y; if (y > maxY) maxY = y;
+                    // 2. INLINED AvgZ + BBox (Single Pass)
+                    let sumZ = tzArr[v0];
+                    let minX = x0, maxX = x0;
+                    let minY = y0, maxY = y0;
+                    
+                    for (let j = 1; j < len; j++) {
+                        const v = fIndices[offset + j];
+                        const x = txArr[v], y = tyArr[v], z = tzArr[v];
+                        sumZ += z;
+                        if (x < minX) minX = x; else if (x > maxX) maxX = x;
+                        if (y < minY) minY = y; else if (y > maxY) maxY = y;
                     }
                     
-                    fAvgZ[i] = avgZ / len;
-                    faceBBoxMinX[i] = minX;
-                    faceBBoxMaxX[i] = maxX;
-                    faceBBoxMinY[i] = minY;
-                    faceBBoxMaxY[i] = maxY;
+                    fAvgZ[i] = sumZ / len;
+                    faceBBoxMinX[i] = minX; faceBBoxMaxX[i] = maxX;
+                    faceBBoxMinY[i] = minY; faceBBoxMaxY[i] = maxY;
                     
                     // Check visibility for rendering (respects culling toggles)
-                    if (useBackfaceCull && !fIsFront[i]) {
+                    if (useBackfaceCull && !isFront) {
                         fVisible[i] = 0;
                         continue;
                     }
-                    if (useDepthCull && !isFaceVisible(i)) {
+                    if (useDepthCull && fAvgZ[i] >= thresholdZ) {
                         fVisible[i] = 0;
                         continue;
                     }
@@ -1582,9 +1627,7 @@ function frame() {
                 // Build a depth grid from ALL front-facing faces using SCANLINE RASTERIZATION
                 // with proper per-pixel Z interpolation via barycentric coordinates
                 if (showSilhouette) {
-                    // Optimized grid resolution - 400 is sufficient for silhouette precision
-                    const GRID_RES = 800;
-                    const depthGrid = new Float32Array(GRID_RES * GRID_RES);
+                    // Optimized: Reuse global depthGrid (allocated in initModel)
                     depthGrid.fill(Infinity);
                     
                     const canvasW = game.width;
@@ -1627,7 +1670,7 @@ function frame() {
                             
                             // Skip degenerate triangles
                             const totalHeight = gy2 - gy0;
-                            if (totalHeight < 0.001) continue;
+                            if (totalHeight < 0.0001) continue;
                             
                             // Clamp to grid bounds
                             const minY = Math.max(0, Math.ceil(gy0));
@@ -1637,8 +1680,8 @@ function frame() {
                             const invTotalHeight = 1.0 / totalHeight;
                             const topHeight = gy1 - gy0;
                             const bottomHeight = gy2 - gy1;
-                            const hasTopHalf = topHeight > 0.001;
-                            const hasBottomHalf = bottomHeight > 0.001;
+                            const hasTopHalf = topHeight > 0.0001;
+                            const hasBottomHalf = bottomHeight > 0.0001;
                             
                             // Scanline rasterization
                             for (let y = minY; y <= maxY; y++) {
@@ -1690,7 +1733,7 @@ function frame() {
                                 const spanWidth = xRight - xLeft;
                                 const rowOffset = y * GRID_RES;
                                 
-                                if (spanWidth < 0.001) {
+                                if (spanWidth < 0.0001) {
                                     // Very thin span - use average Z
                                     const z = (zLeft + zRight) * 0.5;
                                     for (let x = startX; x <= endX; x++) {
@@ -1711,7 +1754,8 @@ function frame() {
                     }
                     // Relative tolerance for depth comparison
                     const depthRange = maxFrontZ - minFrontZ;
-                    const DEPTH_TOLERANCE = Math.max(0.005, depthRange * 0.04);
+                    // Reduced tolerance from 0.04 to 0.005 to prevent background bleed-through
+                    const DEPTH_TOLERANCE = Math.max(0.01, depthRange * 0.005);
                     
                     // Helper: sample depth grid with bounds check
                     function sampleDepthGrid(x, y) {
@@ -1856,20 +1900,42 @@ function frame() {
             const fVisible = faceVisible;
             const fIsFront = faceIsFrontFacing;
             const fCount = faceCount;
+            const thresholdZ = modelCenterZ + CAMERA.depthCull.threshold;
+            const tzArr = transformedZ;
             
             // Cache face visibility and front-facing state first
             for (let i = 0; i < fCount; i++) {
-                fIsFront[i] = isFaceFrontFacing(i) ? 1 : 0;
+                // 1. INLINED Front Check
+                const offset = faceOffsets[i];
+                const v0 = faceIndices[offset];
+                const v1 = faceIndices[offset + 1];
+                const v2 = faceIndices[offset + 2];
+                const x0 = transformedX[v0], y0 = transformedY[v0];
+                const x1 = transformedX[v1], y1 = transformedY[v1];
+                const x2 = transformedX[v2], y2 = transformedY[v2];
+                const signedArea = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+                const isFront = signedArea > 0;
                 
-                // Backface culling: check winding order
-                if (useBackfaceCull && !fIsFront[i]) {
+                fIsFront[i] = isFront ? 1 : 0;
+                
+                // Backface culling
+                if (useBackfaceCull && !isFront) {
                     fVisible[i] = 0;
                     continue;
                 }
-                // Depth culling: check if behind model center
-                if (useDepthCull && !isFaceVisible(i)) {
-                    fVisible[i] = 0;
-                    continue;
+                
+                // Depth culling
+                if (useDepthCull) {
+                    // Calculate AvgZ inline
+                    let sumZ = tzArr[v0];
+                    const len = faceLengths[i];
+                    for (let j = 1; j < len; j++) {
+                        sumZ += tzArr[faceIndices[offset + j]];
+                    }
+                    if ((sumZ / len) >= thresholdZ) {
+                         fVisible[i] = 0;
+                         continue;
+                    }
                 }
                 fVisible[i] = 1;
             }
