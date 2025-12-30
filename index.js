@@ -1144,6 +1144,18 @@ function frame() {
                     const offset = faceOffsets[i];
                     const len = faceLengths[i];
                     
+                    // Skip tiny faces (< 2x2 pixels)
+                    const v0 = faceIndices[offset];
+                    let minX = transformedX[v0], maxX = minX;
+                    let minY = transformedY[v0], maxY = minY;
+                    for (let j = 1; j < len; j++) {
+                        const v = faceIndices[offset + j];
+                        const x = transformedX[v], y = transformedY[v];
+                        if (x < minX) minX = x; else if (x > maxX) maxX = x;
+                        if (y < minY) minY = y; else if (y > maxY) maxY = y;
+                    }
+                    if ((maxX - minX) < 2 && (maxY - minY) < 2) continue;
+                    
                     ctx.beginPath();
                     const firstVert = faceIndices[offset];
                     ctx.moveTo(transformedX[firstVert], transformedY[firstVert]);
@@ -1158,6 +1170,7 @@ function frame() {
                 ctx.globalAlpha = 1.0; // Reset alpha
             } else {
                 // OPAQUE MODE: Draw solid faces with proper hidden line removal
+                // In opaque mode, back-facing faces are ALWAYS hidden (no point drawing them)
                 ctx.fillStyle = FACE_COLOR;
                 ctx.strokeStyle = FOREGROUND;
                 ctx.lineWidth = 0.3;
@@ -1165,74 +1178,48 @@ function frame() {
                 const showEdges = CAMERA.render.showEdges;
                 
                 // Calculate avgZ and visibility for all faces
+                // OPAQUE ALWAYS culls backfaces (they're hidden by front faces)
                 let visibleCount = 0;
                 
                 for (let i = 0; i < faceCount; i++) {
-                    // Check visibility if z-culling enabled
-                    if (useZCull) {
-                        const isFront = isFaceFrontFacing(i);
-                        faceVisible[i] = isFront ? 1 : 0;
-                        if (!isFront) continue;
-                    } else {
-                        faceVisible[i] = 1;
-                    }
+                    // Always cull back-facing faces in opaque mode
+                    const isFront = isFaceFrontFacing(i);
+                    faceVisible[i] = isFront ? 1 : 0;
+                    if (!isFront) continue;
                     
-                    // Calculate average Z
                     const offset = faceOffsets[i];
                     const len = faceLengths[i];
+                    
+                    // Calculate average Z
                     let avgZ = 0;
                     for (let j = 0; j < len; j++) {
                         avgZ += transformedZ[faceIndices[offset + j]];
                     }
-                    faceAvgZ[i] = avgZ / len;
                     
+                    faceAvgZ[i] = avgZ / len;
                     faceSortIndices[visibleCount++] = i;
                 }
                 
-                // Quick sort for better performance with many faces
-                // Using native sort on a view of the array
-                const sortView = faceSortIndices.subarray(0, visibleCount);
-                const tempSort = Array.from(sortView);
-                tempSort.sort((a, b) => faceAvgZ[b] - faceAvgZ[a]);
-                for (let i = 0; i < visibleCount; i++) {
-                    faceSortIndices[i] = tempSort[i];
-                }
+                // Sort visible faces by depth (back-to-front)
+                // Use native sort on the subarray view - this is fast and in-place (no allocations)
+                faceSortIndices.subarray(0, visibleCount).sort((a, b) => faceAvgZ[b] - faceAvgZ[a]);
                 
-                if (showEdges) {
-                    // With edges: Must draw each face separately for proper occlusion
-                    for (let s = 0; s < visibleCount; s++) {
-                        const i = faceSortIndices[s];
-                        const offset = faceOffsets[i];
-                        const len = faceLengths[i];
-                        
-                        ctx.beginPath();
-                        const firstVert = faceIndices[offset];
-                        ctx.moveTo(transformedX[firstVert], transformedY[firstVert]);
-                        for (let j = 1; j < len; j++) {
-                            const vert = faceIndices[offset + j];
-                            ctx.lineTo(transformedX[vert], transformedY[vert]);
-                        }
-                        ctx.closePath();
-                        ctx.fill();
-                        ctx.stroke();
+                // Draw faces back-to-front
+                for (let s = 0; s < visibleCount; s++) {
+                    const i = faceSortIndices[s];
+                    const offset = faceOffsets[i];
+                    const len = faceLengths[i];
+                    
+                    ctx.beginPath();
+                    const firstVert = faceIndices[offset];
+                    ctx.moveTo(transformedX[firstVert], transformedY[firstVert]);
+                    for (let j = 1; j < len; j++) {
+                        const vert = faceIndices[offset + j];
+                        ctx.lineTo(transformedX[vert], transformedY[vert]);
                     }
-                } else {
-                    // No edges: Still need per-face drawing due to Canvas fill rule issues
-                    for (let s = 0; s < visibleCount; s++) {
-                        const i = faceSortIndices[s];
-                        const offset = faceOffsets[i];
-                        const len = faceLengths[i];
-                        
-                        ctx.beginPath();
-                        const firstVert = faceIndices[offset];
-                        ctx.moveTo(transformedX[firstVert], transformedY[firstVert]);
-                        for (let j = 1; j < len; j++) {
-                            const vert = faceIndices[offset + j];
-                            ctx.lineTo(transformedX[vert], transformedY[vert]);
-                        }
-                        ctx.closePath();
-                        ctx.fill();
-                    }
+                    ctx.closePath();
+                    ctx.fill();
+                    if (showEdges) ctx.stroke();
                 }
             }
             
