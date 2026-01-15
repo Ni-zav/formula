@@ -1462,6 +1462,9 @@ function frame() {
                 const thresholdZ = modelCenterZ + CAMERA.depthCull.threshold;
                 
                 // Determine visibility and draw each face individually (for proper alpha stacking)
+                const viewW = game.width;
+                const viewH = game.height;
+
                 for (let i = 0; i < fCount; i++) {
                     const offset = fOffsets[i];
                     const len = fLengths[i];
@@ -1494,6 +1497,12 @@ function frame() {
                         if (y < minY) minY = y; else if (y > maxY) maxY = y;
                     }
                     
+                    // Viewport Culling (Strict 2D Frustum Check)
+                    if (maxX < 0 || minX > viewW || maxY < 0 || minY > viewH) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+
                     // Check depth threshold
                     if (useDepthCull && (sumZ / len) >= thresholdZ) {
                         fVisible[i] = 0;
@@ -1502,7 +1511,6 @@ function frame() {
                     
                     // Skip tiny faces (< 2x2 pixels)
                     if ((maxX - minX) < 2 && (maxY - minY) < 2) {
-                         // Still mark as visible for edges? No, hide tiny faces.
                          fVisible[i] = 0;
                          continue;
                     }
@@ -1510,11 +1518,12 @@ function frame() {
                     fVisible[i] = 1;
                     
                     // Draw each face individually so overlapping areas stack alpha
+                    // OPTIMIZATION: Use integer coordinates for faster canvas rasterization
                     ctx.beginPath();
-                    ctx.moveTo(x0, y0);
+                    ctx.moveTo(x0 | 0, y0 | 0);
                     for (let j = 1; j < len; j++) {
                         const vert = fIndices[offset + j];
-                        ctx.lineTo(txArr[vert], tyArr[vert]);
+                        ctx.lineTo(txArr[vert] | 0, tyArr[vert] | 0);
                     }
                     ctx.closePath();
                     ctx.fill();
@@ -1531,6 +1540,8 @@ function frame() {
                 //
                 const showEdges = CAMERA.render.showEdges;
                 const showSilhouette = CAMERA.render.showSilhouette;
+                const viewW = game.width;
+                const viewH = game.height;
                 
                 // Cache array references for hot loop
                 const fOffsets = faceOffsets;
@@ -1587,6 +1598,13 @@ function frame() {
                         fVisible[i] = 0;
                         continue;
                     }
+
+                    // Viewport Culling (Strict 2D Frustum Check) - BIG PERFORMANCE WIN
+                    if (maxX < 0 || minX > viewW || maxY < 0 || minY > viewH) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+
                     if (useDepthCull && fAvgZ[i] >= thresholdZ) {
                         fVisible[i] = 0;
                         continue;
@@ -1613,10 +1631,11 @@ function frame() {
                     
                     ctx.beginPath();
                     const firstVert = fIndices[offset];
-                    ctx.moveTo(txArr[firstVert], tyArr[firstVert]);
+                    // OPTIMIZATION: Use integer coordinates
+                    ctx.moveTo(txArr[firstVert] | 0, tyArr[firstVert] | 0);
                     for (let j = 1; j < len; j++) {
                         const vert = fIndices[offset + j];
-                        ctx.lineTo(txArr[vert], tyArr[vert]);
+                        ctx.lineTo(txArr[vert] | 0, tyArr[vert] | 0);
                     }
                     ctx.closePath();
                     ctx.fill();
@@ -1641,6 +1660,7 @@ function frame() {
                     // Optimized scanline triangle rasterization with Z interpolation
                     // Uses horizontal scanlines and edge walking for efficiency
                     for (let f = 0; f < fCount; f++) {
+                        // OPAQUE MODE: Only consider front-facing faces for occlusion
                         if (!fIsFront[f]) continue;
                         
                         const offset = fOffsets[f];
@@ -1754,8 +1774,13 @@ function frame() {
                     }
                     // Relative tolerance for depth comparison
                     const depthRange = maxFrontZ - minFrontZ;
-                    // Reduced tolerance from 0.04 to 0.005 to prevent background bleed-through
-                    const DEPTH_TOLERANCE = Math.max(0.01, depthRange * 0.005);
+                    
+                    // "Tight" Tolerance for avoiding background bleed-through (0.3%)
+                    const TIGHT_TOLERANCE = Math.max(0.003, depthRange * 0.003);
+                    
+                    // "Background" Threshold for detecting significant depth gaps (5%)
+                    // If a sample is this much deeper than the edge, it's definitely a background surface
+                    const BACKGROUND_THRESHOLD = Math.max(0.05, depthRange * 0.05);
                     
                     // Helper: sample depth grid with bounds check
                     function sampleDepthGrid(x, y) {
@@ -1768,22 +1793,32 @@ function frame() {
                     // This helps avoid self-occlusion where silhouette edges meet their own front faces
                     function isEdgePointVisible(px, py, pz, nx, ny) {
                         // Sample at center and offset perpendicular to edge direction
-                        const OFFSET = 1.5; // pixels offset perpendicular to edge
+                        // Restore reasonable offset to sample neighborhood (not single pixel)
+                        const OFFSET = 1.0; 
                         
-                        // Center sample
-                        const d0 = sampleDepthGrid(px, py);
-                        const vis0 = d0 === Infinity || pz <= d0 + DEPTH_TOLERANCE;
+                        // Helper to classify sample visibility
+                        function checkSample(d) {
+                            if (d === Infinity) return 2; // Strong Pass (Open Space)
+                            const diff = d - pz;
+                            if (diff > BACKGROUND_THRESHOLD) return 2; // Strong Pass (Background Surface)
+                            if (diff >= -TIGHT_TOLERANCE) return 1; // Weak Pass (Self/Surface)
+                            return 0; // Fail (Occluded)
+                        }
+
+                        // Collect votes
+                        const v0 = checkSample(sampleDepthGrid(px, py));
+                        const v1 = checkSample(sampleDepthGrid(px + nx * OFFSET, py + ny * OFFSET));
+                        const v2 = checkSample(sampleDepthGrid(px - nx * OFFSET, py - ny * OFFSET));
                         
-                        // Offset sample on one side (perpendicular to edge)
-                        const d1 = sampleDepthGrid(px + nx * OFFSET, py + ny * OFFSET);
-                        const vis1 = d1 === Infinity || pz <= d1 + DEPTH_TOLERANCE;
+                        // Logic:
+                        // - If ANY sample is a "Strong Pass" (Background/Infinity), the edge is on a silhouette boundary -> SHOW IT.
+                        // - Otherwise, require Majority (2+) "Weak Passes" to confirm it's a visible surface detail.
                         
-                        // Offset sample on other side
-                        const d2 = sampleDepthGrid(px - nx * OFFSET, py - ny * OFFSET);
-                        const vis2 = d2 === Infinity || pz <= d2 + DEPTH_TOLERANCE;
+                        if (v0 === 2 || v1 === 2 || v2 === 2) return true;
                         
-                        // Majority vote: visible if 2+ samples pass
-                        return (vis0 ? 1 : 0) + (vis1 ? 1 : 0) + (vis2 ? 1 : 0) >= 2;
+                        // Count weak passes
+                        const weakVotes = (v0 >= 1 ? 1 : 0) + (v1 >= 1 ? 1 : 0) + (v2 >= 1 ? 1 : 0);
+                        return weakVotes >= 2;
                     }
                     
                     ctx.beginPath();
@@ -1799,7 +1834,8 @@ function frame() {
                         // Determine if this is a silhouette edge
                         let isSilhouette = false;
                         if (adjacentFaces.length === 1) {
-                            isSilhouette = fIsFront[adjacentFaces[0]] === 1;
+                            // Boundary edge: visible if face is front
+                             isSilhouette = fIsFront[adjacentFaces[0]] === 1;
                         } else if (adjacentFaces.length === 2) {
                             isSilhouette = fIsFront[adjacentFaces[0]] !== fIsFront[adjacentFaces[1]];
                         }
@@ -1994,7 +2030,7 @@ function frame() {
         // MODE-SPECIFIC BEHAVIOR:
         // - OPAQUE SOLID: Already handled above (silhouettes drawn first, then faces paint over)
         // - TRANSPARENT SOLID: All silhouettes visible ON TOP (can see through)
-        // - WIREFRAME: Front-facing silhouettes only
+        // - WIREFRAME: Front-facing silhouettes only (unless culling is OFF)
         //
         if (CAMERA.render.showSilhouette && faceCount > 0) {
             const isOpaqueSolid = CAMERA.render.mode === 'solid' && CAMERA.render.solidType === 'opaque';
@@ -2003,22 +2039,32 @@ function frame() {
             if (isOpaqueSolid) {
                 // Do nothing - handled above
             } else {
-                const isTransparent = CAMERA.render.mode === 'solid' && CAMERA.render.solidType === 'transparent';
-                const isWireframe = CAMERA.render.mode === 'wireframe';
-                
-                const fIsFront = faceIsFrontFacing;
+                const useBackfaceCull = CAMERA.backfaceCull.enabled;
                 const fCount = faceCount;
                 
-                // Compute front-facing state for all faces
+                // INLINE: Compute front-facing state for all faces (Performance)
+                // We re-compute this here because the previous computation might have been skipped 
+                // or we are in a different mode branch.
+                const offsetArr = faceOffsets;
+                const indicesArr = faceIndices;
+                const txArr = transformedX;
+                const tyArr = transformedY;
+                const fIsFront = faceIsFrontFacing;
+
                 for (let i = 0; i < fCount; i++) {
-                    fIsFront[i] = isFaceFrontFacing(i) ? 1 : 0;
+                    const offset = offsetArr[i];
+                    // Triangle signed area check
+                    const v0 = indicesArr[offset];
+                    const v1 = indicesArr[offset + 1];
+                    const v2 = indicesArr[offset + 2];
+                    const x0 = txArr[v0], y0 = tyArr[v0];
+                    const signedArea = (txArr[v1] - x0) * (tyArr[v2] - y0) - (txArr[v2] - x0) * (tyArr[v1] - y0);
+                    fIsFront[i] = signedArea > 0 ? 1 : 0;
                 }
                 
                 ctx.beginPath();
                 
                 const edgeLen = edges.length;
-                const txArr = transformedX;
-                const tyArr = transformedY;
                 
                 for (let i = 0; i < edgeLen; i++) {
                     const adjacentFaces = edgeToFaces[i];
@@ -2028,22 +2074,21 @@ function frame() {
                         // Boundary edge
                         const isFront = fIsFront[adjacentFaces[0]];
                         
-                        // WIREFRAME: only show front-facing boundary edges
-                        if (isWireframe && !isFront) continue;
+                        // Strict Outline: Only show front-facing boundary edges
+                        // If wireframe/transparent, we essentially want the "outline" of the volume
+                        if (!isFront) continue;
                         
-                        // Only draw if adjacent face is front-facing
-                        if (isFront) {
-                            ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
-                            ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
-                        }
+                        ctx.moveTo(txArr[edge[0]] | 0, tyArr[edge[0]] | 0);
+                        ctx.lineTo(txArr[edge[1]] | 0, tyArr[edge[1]] | 0);
+
                     } else if (adjacentFaces.length === 2) {
                         const isFront1 = fIsFront[adjacentFaces[0]];
                         const isFront2 = fIsFront[adjacentFaces[1]];
                         
                         // Silhouette edge: one face front-facing, one back-facing
                         if (isFront1 !== isFront2) {
-                            ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
-                            ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
+                            ctx.moveTo(txArr[edge[0]] | 0, tyArr[edge[0]] | 0);
+                            ctx.lineTo(txArr[edge[1]] | 0, tyArr[edge[1]] | 0);
                         }
                     }
                 }
