@@ -5,6 +5,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>3D Viewer</title>
     <style>
+        :root {
+            --accent: #50FF50;
+            --accent-dim: #2a7a2a;
+            --bg-primary: #0a0a0a;
+            --bg-secondary: #121212;
+            --bg-tertiary: #1a1a1a;
+            --border: #2a2a2a;
+            --text-dim: #666;
+            --text-muted: #555;
+            --control-height: 32px;
+            --radius: 6px;
+            --radius-sm: 4px;
+        }
+        
         * {
             margin: 0;
             padding: 0;
@@ -12,71 +26,241 @@
         }
         
         html, body {
+            height: 100%;
             overflow: hidden;
         }
         
         body {
-            background: #0a0a0a;
-            font-family: 'SF Mono', 'Monaco', 'Consolas', monospace;
-            display: flex;
-            justify-content: center;
-            align-items: flex-start;
-            padding: 20px 0;
-            height: 100vh;
+            background: var(--bg-primary);
+            font-family: 'SF Mono', 'Monaco', 'Consolas', 'Menlo', monospace;
             color: #fff;
         }
         
-        .container {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 12px;
-            transform: scale(0.7);
-            transform-origin: top center;
+        /* Subtle animated background gradient */
+        body::before {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background: 
+                radial-gradient(ellipse at 20% 20%, rgba(80, 255, 80, 0.03) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 80%, rgba(80, 255, 80, 0.02) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
         }
         
+        /* Subtle grid pattern overlay */
+        body::after {
+            content: '';
+            position: fixed;
+            inset: 0;
+            background-image: 
+                linear-gradient(rgba(80, 255, 80, 0.02) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(80, 255, 80, 0.02) 1px, transparent 1px);
+            background-size: 40px 40px;
+            pointer-events: none;
+            z-index: 0;
+        }
+        
+        /* ==========================================
+           MAIN LAYOUT - Full viewport grid
+           ========================================== */
+        .container {
+            display: grid;
+            grid-template-rows: 1fr auto auto;
+            height: 100vh;
+            height: 100dvh; /* Dynamic viewport for mobile */
+            padding: 12px;
+            gap: 10px;
+        }
+        
+        /* ==========================================
+           VIEWER AREA - Canvas + side controls
+           ========================================== */
         .viewer-area {
             position: relative;
             display: flex;
             align-items: center;
             justify-content: center;
+            min-height: 0; /* Allow shrinking in grid */
+            padding: 0 50px; /* Space for side controls */
+        }
+        
+        /* Canvas wrapper for glow effect */
+        .canvas-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            max-width: 100%;
+            max-height: 100%;
+        }
+        
+        .canvas-wrap::before {
+            content: '';
+            position: absolute;
+            inset: -2px;
+            border-radius: calc(var(--radius) + 2px);
+            background: linear-gradient(135deg, var(--accent) 0%, transparent 50%, var(--accent) 100%);
+            opacity: 0.15;
+            filter: blur(8px);
+            animation: pulse-glow 4s ease-in-out infinite;
+            pointer-events: none;
+        }
+        
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 0.1; transform: scale(1); }
+            50% { opacity: 0.2; transform: scale(1.01); }
         }
         
         canvas {
-            border: 1px solid #222;
-            border-radius: 4px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            max-width: 100%;
+            max-height: 100%;
+            aspect-ratio: 1;
+            background: var(--bg-primary);
+            position: relative;
+            z-index: 1;
+            box-shadow: 
+                0 0 20px rgba(0, 0, 0, 0.5),
+                inset 0 0 30px rgba(0, 0, 0, 0.3);
         }
         
+        /* Side control panels */
+        .left-controls, .right-controls {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 10;
+        }
         
-        .controls {
+        .left-controls {
+            left: 8px;
+        }
+        
+        .right-controls {
+            right: 8px;
+        }
+        
+        /* Vertical slider control */
+        .vertical-control {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 4px;
+            background: rgba(18, 18, 18, 0.9);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            width: 36px;
+            cursor: ns-resize;
+            transition: all 0.2s;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        
+        .vertical-control:hover {
+            border-color: #3a3a3a;
+        }
+        
+        .vertical-control label {
+            font-size: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            transform: rotate(180deg);
+        }
+        
+        .vertical-control .value {
+            font-size: 9px;
+            color: var(--accent);
+            writing-mode: vertical-rl;
+            transform: rotate(180deg);
+            font-variant-numeric: tabular-nums;
+        }
+        
+        .vertical-slider-wrap {
+            flex: 1;
             display: flex;
             align-items: center;
-            gap: 24px;
-            padding: 12px 20px;
-            background: #151515;
-            border: 1px solid #222;
-            border-radius: 8px;
+            justify-content: center;
+            min-height: 100px;
+        }
+        
+        input[type="range"].vertical {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 90px;
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            transform: rotate(-90deg);
+            transform-origin: center center;
+        }
+        
+        input[type="range"].vertical::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 16px;
+            height: 16px;
+            background: var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+            box-shadow: 0 0 6px rgba(80, 255, 80, 0.4);
+        }
+        
+        input[type="range"].vertical::-moz-range-thumb {
+            width: 16px;
+            height: 16px;
+            background: var(--accent);
+            border-radius: 50%;
+            cursor: pointer;
+            border: none;
+        }
+        
+        /* ==========================================
+           CONTROLS BAR - Bottom controls
+           ========================================== */
+        .controls {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 14px;
+            background: rgba(18, 18, 18, 0.85);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            position: relative;
+            z-index: 5;
         }
         
         .control-group {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 6px;
         }
         
         label {
-            font-size: 11px;
+            font-size: 10px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: #666;
+            color: var(--text-dim);
         }
         
         /* Toggle Switch */
         .toggle {
-            position: relative;
             display: flex;
             background: #222;
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             overflow: hidden;
         }
         
@@ -89,32 +273,55 @@
             font-size: 11px;
             font-family: inherit;
             cursor: pointer;
-            color: #555;
+            color: var(--text-muted);
             transition: all 0.2s;
             border: none;
             background: transparent;
         }
         
         .toggle-btn.active {
-            background: #50FF50;
+            background: var(--accent);
             color: #000;
+            font-weight: 500;
         }
         
         .toggle-btn:hover:not(.active) {
-            color: #888;
+            color: #999;
         }
         
-        /* Horizontal Slider */
-        .slider-container {
+        /* Slider boxes */
+        .slider-box {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
+            padding: 6px 10px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            cursor: ew-resize;
+            transition: border-color 0.2s;
+        }
+        
+        .slider-box:hover {
+            border-color: #3a3a3a;
+        }
+        
+        .slider-box label {
+            font-size: 10px;
+            color: var(--text-muted);
+            min-width: 32px;
+        }
+        
+        .slider-box .value {
+            font-size: 11px;
+            min-width: 45px;
+            text-align: right;
         }
         
         input[type="range"] {
             -webkit-appearance: none;
             appearance: none;
-            width: 120px;
+            width: 80px;
             height: 4px;
             background: #333;
             border-radius: 2px;
@@ -123,86 +330,167 @@
         
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none;
-            width: 14px;
-            height: 14px;
-            background: #50FF50;
+            width: 16px;
+            height: 16px;
+            background: var(--accent);
             border-radius: 50%;
             cursor: pointer;
+            box-shadow: 0 0 6px rgba(80, 255, 80, 0.4);
             transition: transform 0.1s;
         }
         
         input[type="range"]::-webkit-slider-thumb:hover {
-            transform: scale(1.2);
+            transform: scale(1.15);
         }
         
         input[type="range"]::-moz-range-thumb {
-            width: 14px;
-            height: 14px;
-            background: #50FF50;
+            width: 16px;
+            height: 16px;
+            background: var(--accent);
             border-radius: 50%;
             cursor: pointer;
             border: none;
         }
         
         .value {
-            font-size: 12px;
-            color: #50FF50;
-            min-width: 48px;
-            text-align: right;
+            font-size: 11px;
+            color: var(--accent);
+            font-variant-numeric: tabular-nums;
         }
         
-        /* Scrollable slider box (for Focal/Zoom) */
-        .slider-box {
+        /* Z-Culling / Render mode boxes */
+        .z-culling-box {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             padding: 6px 10px;
-            background: #1a1a1a;
-            border: 1px solid #2a2a2a;
-            border-radius: 6px;
-            cursor: ew-resize;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
         }
         
-        .slider-box:hover {
-            border-color: #333;
-        }
-        
-        .slider-box label {
+        .z-culling-box label {
             font-size: 10px;
-            color: #555;
+            color: var(--text-muted);
         }
         
-        .slider-box .value {
-            min-width: 42px;
-            font-size: 11px;
+        .z-culling-toggle {
+            padding: 5px 10px;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            color: var(--text-muted);
+            background: #222;
+            border: 1px solid #333;
+            border-radius: var(--radius-sm);
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
         }
         
-        /* Model loader section */
+        .z-culling-toggle:hover {
+            border-color: #444;
+            color: #888;
+        }
+        
+        .z-culling-toggle.active {
+            background: var(--accent);
+            color: #000;
+            border-color: var(--accent);
+            font-weight: 500;
+        }
+        
+        .z-culling-mode {
+            padding: 5px 10px;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            color: var(--accent);
+            background: transparent;
+            border: 1px solid var(--accent);
+            border-radius: var(--radius-sm);
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+        
+        .z-culling-mode:hover {
+            background: rgba(80, 255, 80, 0.15);
+        }
+        
+        .z-culling-mode.active {
+            background: var(--accent);
+            color: #000;
+        }
+        
+        /* ==========================================
+           MODEL LOADER BAR
+           ========================================== */
         .model-loader {
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
-            gap: 12px;
-            padding: 10px 16px;
-            background: #151515;
-            border: 1px solid #222;
-            border-radius: 8px;
-            min-height: 42px;
+            justify-content: center;
+            gap: 10px;
+            padding: 10px 14px;
+            background: rgba(18, 18, 18, 0.85);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            position: relative;
+            z-index: 5;
         }
         
         .model-loader label {
             font-size: 11px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            color: #666;
+            color: var(--text-dim);
+        }
+        
+        .shape-select {
+            appearance: none;
+            -webkit-appearance: none;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-sm);
+            color: var(--accent);
+            padding: 7px 28px 7px 10px;
+            font-size: 11px;
+            font-family: inherit;
+            cursor: pointer;
+            min-width: 140px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%2350FF50' d='M3 4.5L6 8l3-3.5H3z'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 8px center;
+            transition: border-color 0.2s;
+        }
+        
+        .shape-select:hover {
+            border-color: #3a3a3a;
+        }
+        
+        .shape-select:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+        
+        .shape-select option {
+            background: var(--bg-tertiary);
+            color: var(--accent);
         }
         
         .model-name {
             font-size: 12px;
-            color: #50FF50;
-            flex: 1;
+            color: var(--accent);
+            min-width: 100px;
+            max-width: 180px;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
+            padding: 0 8px;
         }
         
         .model-name.empty {
@@ -211,27 +499,35 @@
         }
         
         .load-btn {
-            padding: 6px 14px;
+            padding: 7px 14px;
             font-size: 11px;
             font-family: inherit;
             cursor: pointer;
             color: #000;
-            background: #50FF50;
+            background: var(--accent);
             border: none;
-            border-radius: 4px;
+            border-radius: var(--radius-sm);
             transition: all 0.2s;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
-            font-weight: 500;
+            letter-spacing: 0.3px;
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(80, 255, 80, 0.3);
+        }
+        
+        .load-btn:hover {
+            box-shadow: 0 4px 12px rgba(80, 255, 80, 0.5);
+            transform: translateY(-1px);
         }
         
         .load-btn:active {
-            transform: scale(0.98);
+            transform: translateY(0);
+            box-shadow: 0 2px 6px rgba(80, 255, 80, 0.3);
         }
         
         .load-btn:disabled {
             opacity: 0.5;
             cursor: not-allowed;
+            box-shadow: none;
         }
         
         .load-btn.processing {
@@ -244,9 +540,9 @@
             position: absolute;
             top: 50%;
             left: 50%;
-            width: 12px;
-            height: 12px;
-            margin: -6px 0 0 -6px;
+            width: 14px;
+            height: 14px;
+            margin: -7px 0 0 -7px;
             border: 2px solid #000;
             border-radius: 50%;
             border-top-color: transparent;
@@ -261,154 +557,252 @@
             display: none;
         }
         
-        /* Right side vertical controls container */
-        .right-controls {
-            position: absolute;
-            right: -44px;
-            top: 50%;
-            transform: translateY(-50%);
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
+        /* ==========================================
+           RESPONSIVE: Tablet (< 900px)
+           ========================================== */
+        @media (max-width: 900px) {
+            .container {
+                padding: 10px;
+                gap: 8px;
+            }
+            
+            .viewer-area {
+                padding: 0 44px;
+            }
+            
+            .vertical-control {
+                width: 32px;
+                padding: 6px 3px;
+            }
+            
+            .vertical-slider-wrap {
+                min-height: 80px;
+            }
+            
+            input[type="range"].vertical {
+                width: 70px;
+            }
+            
+            .controls {
+                gap: 6px;
+                padding: 8px 10px;
+            }
+            
+            input[type="range"] {
+                width: 70px;
+            }
+            
+            .slider-box {
+                padding: 5px 8px;
+                gap: 6px;
+            }
+            
+            .z-culling-box {
+                padding: 5px 8px;
+            }
         }
         
-        /* Left side controls container */
-        .left-controls {
-            position: absolute;
-            left: -44px;
-            top: 50%;
-            transform: translateY(-50%);
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
+        /* ==========================================
+           RESPONSIVE: Mobile (< 600px)
+           ========================================== */
+        @media (max-width: 600px) {
+            .container {
+                padding: 8px;
+                gap: 6px;
+                grid-template-rows: 1fr auto auto auto;
+            }
+            
+            .viewer-area {
+                padding: 0; /* No side controls on mobile - they move below */
+            }
+            
+            /* Hide side controls - we'll show horizontal version */
+            .left-controls, .right-controls {
+                display: none;
+            }
+            
+            /* Mobile horizontal controls strip */
+            .mobile-controls {
+                display: flex !important;
+                justify-content: center;
+                gap: 12px;
+                padding: 8px;
+                background: var(--bg-secondary);
+                border: 1px solid var(--border);
+                border-radius: var(--radius);
+            }
+            
+            .mobile-control {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 4px;
+            }
+            
+            .mobile-control label {
+                font-size: 9px;
+            }
+            
+            .mobile-control input[type="range"] {
+                width: 60px;
+            }
+            
+            .mobile-control .value {
+                font-size: 10px;
+            }
+            
+            .controls {
+                padding: 8px;
+                gap: 5px;
+            }
+            
+            .control-group {
+                gap: 4px;
+            }
+            
+            .toggle-btn {
+                padding: 5px 8px;
+                font-size: 10px;
+            }
+            
+            .slider-box {
+                padding: 4px 6px;
+                gap: 4px;
+            }
+            
+            .slider-box label {
+                min-width: 28px;
+                font-size: 9px;
+            }
+            
+            input[type="range"] {
+                width: 50px;
+            }
+            
+            .slider-box .value {
+                min-width: 36px;
+                font-size: 10px;
+            }
+            
+            .z-culling-box {
+                padding: 4px 6px;
+                gap: 4px;
+            }
+            
+            .z-culling-box label {
+                font-size: 9px;
+            }
+            
+            .z-culling-toggle, .z-culling-mode {
+                padding: 4px 6px;
+                font-size: 9px;
+            }
+            
+            .model-loader {
+                padding: 8px;
+                gap: 6px;
+            }
+            
+            .shape-select {
+                min-width: 110px;
+                padding: 6px 24px 6px 8px;
+                font-size: 10px;
+            }
+            
+            .model-name {
+                min-width: 70px;
+                max-width: 120px;
+                font-size: 11px;
+            }
+            
+            .load-btn {
+                padding: 6px 10px;
+                font-size: 10px;
+            }
         }
         
-
-        
-        /* Vertical slider control (pitch, speed) */
-        .vertical-control {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 4px;
-            background: #151515;
-            border: 1px solid #222;
-            border-radius: 6px;
-            width: 32px;
-            cursor: ns-resize;
+        /* ==========================================
+           RESPONSIVE: Small Mobile (< 400px)
+           ========================================== */
+        @media (max-width: 400px) {
+            .container {
+                padding: 6px;
+                gap: 5px;
+            }
+            
+            .controls {
+                padding: 6px;
+            }
+            
+            .toggle-btn {
+                padding: 4px 6px;
+                font-size: 9px;
+            }
+            
+            input[type="range"] {
+                width: 40px;
+            }
+            
+            .slider-box {
+                padding: 3px 5px;
+            }
+            
+            .z-culling-box {
+                padding: 3px 5px;
+            }
+            
+            .z-culling-toggle, .z-culling-mode {
+                padding: 3px 5px;
+                font-size: 8px;
+            }
+            
+            .model-loader {
+                padding: 6px;
+            }
+            
+            .shape-select {
+                min-width: 90px;
+            }
+            
+            .load-btn {
+                padding: 5px 8px;
+                font-size: 9px;
+            }
         }
         
-        .vertical-control label {
-            font-size: 8px;
-            writing-mode: vertical-rl;
-            text-orientation: mixed;
-            transform: rotate(180deg);
-            letter-spacing: 1px;
-        }
-        
-        .vertical-control .value {
-            min-width: auto;
-            text-align: center;
-            font-size: 9px;
-            writing-mode: vertical-rl;
-            transform: rotate(180deg);
-        }
-        
-        .vertical-slider-wrap {
-            flex: 1;
-            display: flex;
-            align-items: center;
+        /* Hide mobile controls by default */
+        .mobile-controls {
+            display: none;
             justify-content: center;
-            min-height: 200px;
-        }
-        
-        input[type="range"].vertical {
-            -webkit-appearance: none;
-            appearance: none;
-            width: 180px;
-            height: 3px;
-            background: #333;
-            border-radius: 2px;
-            transform: rotate(-90deg);
-            transform-origin: center center;
-        }
-        
-        input[type="range"].vertical::-webkit-slider-thumb {
-            -webkit-appearance: none;
-            width: 12px;
-            height: 12px;
-            background: #50FF50;
-            border-radius: 50%;
-            cursor: pointer;
-        }
-        
-        input[type="range"].vertical::-moz-range-thumb {
-            width: 12px;
-            height: 12px;
-            background: #50FF50;
-            border-radius: 50%;
-            cursor: pointer;
-            border: none;
-        }
-        
-        /* Z-Culling Toggle Styles */
-        .z-culling-box {
-            display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 6px 10px;
-            background: #1a1a1a;
-            border: 1px solid #2a2a2a;
-            border-radius: 6px;
+            gap: 16px;
+            padding: 10px 14px;
+            background: rgba(18, 18, 18, 0.85);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
         }
         
-        .z-culling-box label {
+        .mobile-control {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .mobile-control label {
+            font-size: 9px;
+            color: var(--text-dim);
+        }
+        
+        .mobile-control .value {
             font-size: 10px;
-            color: #555;
         }
         
-        .z-culling-toggle {
-            padding: 5px 10px;
-            font-size: 10px;
-            font-family: inherit;
-            cursor: pointer;
-            color: #555;
-            background: #222;
-            border: 1px solid #333;
-            border-radius: 4px;
-            transition: all 0.2s;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .z-culling-toggle:hover {
-            border-color: #444;
-            color: #777;
-        }
-        
-        .z-culling-toggle.active {
-            background: #50FF50;
-            color: #000;
-            border-color: #50FF50;
-        }
-        
-        .z-culling-mode {
-            padding: 5px 10px;
-            font-size: 10px;
-            font-family: inherit;
-            cursor: pointer;
-            color: #50FF50;
-            background: transparent;
-            border: 1px solid #50FF50;
-            border-radius: 4px;
-            transition: all 0.2s;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .z-culling-mode:hover {
-            background: rgba(80, 255, 80, 0.1);
+        .mobile-control input[type="range"] {
+            width: 60px;
         }
     </style>
 </head>
@@ -426,7 +820,9 @@
                 </div>
             </div>
             
-            <canvas id="game"></canvas>
+            <div class="canvas-wrap">
+                <canvas id="game"></canvas>
+            </div>
             
             <!-- Right side: Animation controls (Pitch/Speed) -->
             <div class="right-controls">
@@ -494,15 +890,33 @@
             </div>
         </div>
         
-        <div class="model-loader">
-            <label>Model</label>
-            <span class="model-name empty" id="model-name">No model loaded</span>
-            <input type="file" id="file-input" accept=".js">
-            <button class="load-btn" id="load-btn">Load .js</button>
+        <!-- Mobile controls (visible only on small screens) -->
+        <div class="mobile-controls" id="mobile-controls">
+            <div class="mobile-control">
+                <label>ROTATE</label>
+                <input type="range" id="mobile-rotation-slider" min="0" max="360" value="0">
+                <span class="value" id="mobile-rotation-value">0°</span>
+            </div>
+            <div class="mobile-control">
+                <label>PITCH</label>
+                <input type="range" id="mobile-pitch-slider" min="0" max="360" value="20">
+                <span class="value" id="mobile-pitch-value">20°</span>
+            </div>
+            <div class="mobile-control">
+                <label>SPEED</label>
+                <input type="range" id="mobile-speed-slider" min="0" max="1" step="0.1" value="0.5">
+                <span class="value" id="mobile-speed-value">0.5x</span>
+            </div>
         </div>
         
         <div class="model-loader">
-            <label>Convert</label>
+            <label>Model</label>
+            <select class="shape-select" id="shape-select">
+                <option value="">Select example...</option>
+            </select>
+            <span class="model-name empty" id="model-name">No model loaded</span>
+            <input type="file" id="file-input" accept=".js">
+            <button class="load-btn" id="load-btn">Load .js</button>
             <input type="file" id="convert-file-input" accept=".obj,.glb,.gltf,.dae,.fbx">
             <button class="load-btn" id="convert-btn">Convert 3D</button>
         </div>

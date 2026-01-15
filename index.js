@@ -92,6 +92,7 @@ const zoomBox = document.getElementById('zoom-box');
 const pitchControl = document.getElementById('pitch-control');
 const speedControl = document.getElementById('speed-control');
 const rotationControl = document.getElementById('rotation-control');
+const shapeSelect = document.getElementById('shape-select');
 
 // ============================================
 // 3D Model Converter (Browser-based)
@@ -584,6 +585,84 @@ function loadConvertedModel(result) {
 }
 
 // ============================================
+// Example Shapes - Populate and Load
+// ============================================
+const EXAMPLE_SHAPES = [
+    'cube', 'pyramid', 'tetrahedron', 'octahedron', 'diamond',
+    'icosahedron', 'dodecahedron', 'cuboctahedron', 'geodesic_dome',
+    'sphere_wireframe', 'torus_wireframe', 'cylinder', 'cone', 'ellipsoid',
+    'prism_triangular', 'prism_pentagonal', 'prism_hexagonal', 'prism_octagonal',
+    'antiprism', 'stellated_octahedron', 'truncated_cube', 'gem_cut', 'crystal',
+    'mobius_strip', 'klein_bottle', 'trefoil_knot', 'lissajous_knot', 'infinity',
+    'tesseract', 'menger_sponge', 'sierpinski_tetrahedron', 'cube_in_cube', 'cage',
+    'twisted_box', 'spiral_tower', 'gyroscope', 'hourglass',
+    'heart', 'star_3d', 'arrow', 'cross_3d', 'house_simple',
+    'aizawa_attractor', 'rossler_attractor', 'thomas_attractor', 'chaos_attractor'
+];
+
+// Populate dropdown
+if (shapeSelect) {
+    EXAMPLE_SHAPES.forEach(shape => {
+        const option = document.createElement('option');
+        option.value = shape;
+        option.textContent = shape.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+        shapeSelect.appendChild(option);
+    });
+    
+    shapeSelect.addEventListener('change', async (e) => {
+        const shapeName = e.target.value;
+        if (!shapeName) return;
+        
+        try {
+            modelNameEl.textContent = 'Loading...';
+            modelNameEl.classList.add('empty');
+            modelNameEl.style.color = '#888';
+            
+            const response = await fetch(`shapes/${shapeName}.js`);
+            if (!response.ok) throw new Error(`Shape not found: ${shapeName}`);
+            
+            const code = await response.text();
+            
+            // Clear previous model
+            window.vs = undefined;
+            window.fs = undefined;
+            modelLoaded = false;
+            
+            // Parse the model code
+            const modifiedCode = code
+                .replace(/const\s+vs\s*=/g, 'window.vs =')
+                .replace(/const\s+fs\s*=/g, 'window.fs =')
+                .replace(/let\s+vs\s*=/g, 'window.vs =')
+                .replace(/let\s+fs\s*=/g, 'window.fs =')
+                .replace(/var\s+vs\s*=/g, 'window.vs =')
+                .replace(/var\s+fs\s*=/g, 'window.fs =');
+            
+            eval(modifiedCode);
+            
+            vs = window.vs;
+            fs = window.fs;
+            
+            if (!vs || !fs || !Array.isArray(vs) || !Array.isArray(fs)) {
+                throw new Error('Invalid model format');
+            }
+            
+            initModel();
+            
+            const displayName = shapeName.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+            modelNameEl.textContent = displayName;
+            modelNameEl.classList.remove('empty');
+            modelNameEl.style.color = '#50FF50';
+            
+        } catch (error) {
+            console.error('Failed to load shape:', error);
+            modelNameEl.textContent = `Error: ${error.message}`;
+            modelNameEl.classList.add('empty');
+            modelNameEl.style.color = '#FF5050';
+        }
+    });
+}
+
+// ============================================
 // Scroll wheel support for control containers
 // ============================================
 function addScrollSupport(container, slider, valueEl, formatFn, updateFn) {
@@ -732,7 +811,63 @@ rotationSlider.addEventListener('input', (e) => {
     rotationValue.textContent = `${Math.round(val)}°`;
     // Update the actual angle (convert degrees to radians)
     angle = val * Math.PI / 180;
+    
+    // Sync mobile slider
+    if (mobileRotationSlider) {
+        mobileRotationSlider.value = val;
+        if (mobileRotationValue) mobileRotationValue.textContent = `${Math.round(val)}°`;
+    }
 });
+
+// ============================================
+// Mobile Controls Sync
+// ============================================
+const mobileRotationSlider = document.getElementById('mobile-rotation-slider');
+const mobilePitchSlider = document.getElementById('mobile-pitch-slider');
+const mobileSpeedSlider = document.getElementById('mobile-speed-slider');
+const mobileRotationValue = document.getElementById('mobile-rotation-value');
+const mobilePitchValue = document.getElementById('mobile-pitch-value');
+const mobileSpeedValue = document.getElementById('mobile-speed-value');
+
+if (mobileRotationSlider) {
+    mobileRotationSlider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        angle = val * Math.PI / 180;
+        
+        // Sync desktop
+        rotationSlider.value = val;
+        rotationValue.textContent = `${Math.round(val)}°`;
+        mobileRotationValue.textContent = `${Math.round(val)}°`;
+    });
+}
+
+if (mobilePitchSlider) {
+    mobilePitchSlider.addEventListener('input', (e) => {
+        let val = parseFloat(e.target.value);
+        // Wrap
+        if (val >= 360) val = 0;
+        if (val < 0) val = 360 + val;
+        
+        CAMERA.pitch = Math.round(val);
+        
+        // Sync desktop
+        pitchSlider.value = val;
+        pitchValue.textContent = `${CAMERA.pitch}°`;
+        mobilePitchValue.textContent = `${CAMERA.pitch}°`;
+    });
+}
+
+if (mobileSpeedSlider) {
+    mobileSpeedSlider.addEventListener('input', (e) => {
+        const val = parseFloat(e.target.value);
+        CAMERA.rotationSpeed = val;
+        
+        // Sync desktop
+        speedSlider.value = val;
+        speedValue.textContent = `${val.toFixed(1)}x`;
+        mobileSpeedValue.textContent = `${val.toFixed(1)}x`;
+    });
+}
 
 // ============================================
 // Culling Controls
@@ -951,11 +1086,49 @@ function getFocalScale() {
 }
 
 // ============================================
-// Canvas Setup
+// Canvas Setup - Dynamic Resizing
 // ============================================
-game.width = 800;
-game.height = 800;
 const ctx = game.getContext("2d");
+let canvasSize = 800; // Will be updated dynamically
+let halfWidth = canvasSize / 2;
+let halfHeight = canvasSize / 2;
+
+// Resize canvas to fit available space
+function resizeCanvas() {
+    const viewerArea = document.querySelector('.viewer-area');
+    const canvasWrap = document.querySelector('.canvas-wrap');
+    
+    if (!viewerArea || !canvasWrap) return;
+    
+    // Get available space
+    const rect = viewerArea.getBoundingClientRect();
+    const padding = window.innerWidth <= 600 ? 16 : 100; // Less padding on mobile
+    const availableWidth = rect.width - padding;
+    const availableHeight = rect.height - padding;
+    
+    // Use the smaller dimension to maintain square aspect ratio
+    const newSize = Math.min(availableWidth, availableHeight, 1200); // Cap at 1200px
+    
+    // Only resize if significantly different (avoid constant redraws)
+    if (Math.abs(newSize - canvasSize) > 10) {
+        canvasSize = Math.max(300, Math.floor(newSize)); // Minimum 300px
+        game.width = canvasSize;
+        game.height = canvasSize;
+        halfWidth = canvasSize / 2;
+        halfHeight = canvasSize / 2;
+        
+        // Update canvas style for crisp rendering
+        game.style.width = canvasSize + 'px';
+        game.style.height = canvasSize + 'px';
+    }
+}
+
+// Initial resize and listen for window changes
+resizeCanvas();
+window.addEventListener('resize', resizeCanvas);
+window.addEventListener('orientationchange', () => {
+    setTimeout(resizeCanvas, 100);
+});
 
 // ============================================
 // Model data structures (will be initialized)
@@ -1224,9 +1397,6 @@ fileInput.addEventListener('change', (e) => {
     fileInput.value = '';
 });
 
-const halfWidth = game.width / 2;
-const halfHeight = game.height / 2;
-
 // ============================================
 // Performance Optimizations
 // ============================================
@@ -1426,6 +1596,11 @@ function frame() {
         const angleDeg = Math.round(angle * 180 / Math.PI);
         rotationSlider.value = angleDeg;
         rotationValue.textContent = `${angleDeg}°`;
+        
+        if (mobileRotationSlider) {
+            mobileRotationSlider.value = angleDeg;
+            if (mobileRotationValue) mobileRotationValue.textContent = `${angleDeg}°`;
+        }
     }
     
     clear();
