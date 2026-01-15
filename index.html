@@ -272,6 +272,17 @@
             gap: 8px;
         }
         
+        /* Left side controls container */
+        .left-controls {
+            position: absolute;
+            left: -44px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
 
         
         /* Vertical slider control (pitch, speed) */
@@ -340,11 +351,81 @@
             cursor: pointer;
             border: none;
         }
+        
+        /* Z-Culling Toggle Styles */
+        .z-culling-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 6px;
+        }
+        
+        .z-culling-box label {
+            font-size: 10px;
+            color: #555;
+        }
+        
+        .z-culling-toggle {
+            padding: 5px 10px;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            color: #555;
+            background: #222;
+            border: 1px solid #333;
+            border-radius: 4px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .z-culling-toggle:hover {
+            border-color: #444;
+            color: #777;
+        }
+        
+        .z-culling-toggle.active {
+            background: #50FF50;
+            color: #000;
+            border-color: #50FF50;
+        }
+        
+        .z-culling-mode {
+            padding: 5px 10px;
+            font-size: 10px;
+            font-family: inherit;
+            cursor: pointer;
+            color: #50FF50;
+            background: transparent;
+            border: 1px solid #50FF50;
+            border-radius: 4px;
+            transition: all 0.2s;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .z-culling-mode:hover {
+            background: rgba(80, 255, 80, 0.1);
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="viewer-area">
+            <!-- Left side: Rotation angle control -->
+            <div class="left-controls">
+                <div class="vertical-control" id="rotation-control">
+                    <label>ROTATE</label>
+                    <div class="vertical-slider-wrap">
+                        <input type="range" class="vertical" id="rotation-slider" min="0" max="360" value="0">
+                    </div>
+                    <span class="value" id="rotation-value">0°</span>
+                </div>
+            </div>
+            
             <canvas id="game"></canvas>
             
             <!-- Right side: Animation controls (Pitch/Speed) -->
@@ -352,7 +433,7 @@
                 <div class="vertical-control" id="pitch-control">
                     <label>PITCH</label>
                     <div class="vertical-slider-wrap">
-                        <input type="range" class="vertical" id="pitch-slider" min="-90" max="90" value="20">
+                        <input type="range" class="vertical" id="pitch-slider" min="0" max="360" value="20">
                     </div>
                     <span class="value" id="pitch-value">20°</span>
                 </div>
@@ -386,6 +467,30 @@
                 <label>ZOOM</label>
                 <input type="range" id="zoom-slider" min="0.2" max="3" step="0.1" value="1">
                 <span class="value" id="zoom-value">1.0x</span>
+            </div>
+            
+            <div class="z-culling-box">
+                <label>RENDER</label>
+                <button class="z-culling-toggle" id="render-mode-toggle">Wire</button>
+                <button class="z-culling-mode" id="show-edges-toggle">Edges</button>
+                <button class="z-culling-mode" id="solid-type-toggle">Opaque</button>
+                <button class="z-culling-mode" id="show-silhouette-toggle">Silhouette</button>
+            </div>
+            
+            <div class="z-culling-box">
+                <label>BACKFACE</label>
+                <button class="z-culling-toggle" id="backface-cull-toggle">Off</button>
+            </div>
+            
+            <div class="z-culling-box">
+                <label>DEPTH</label>
+                <button class="z-culling-toggle" id="depth-cull-toggle">Off</button>
+            </div>
+            
+            <div class="slider-box" id="depth-threshold-box" style="display: none;">
+                <label>D-THR</label>
+                <input type="range" id="depth-threshold-slider" min="-1" max="1" step="0.1" value="0">
+                <span class="value" id="depth-threshold-value">0.0</span>
             </div>
         </div>
         

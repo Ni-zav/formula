@@ -1,5 +1,10 @@
 const BACKGROUND = "#101010";
 const FOREGROUND = "#50FF50";
+const WIREFRAME_COLOR = "#2a7a2a";     // Darkened wireframe lines
+const FACE_COLOR = "#0a2a0a"; // Solid face fill color (dark green for consistency)
+const FACE_ALPHA = 0.3;       // Opacity for transparent solid mode (0-1)
+const TRANSPARENT_FACE_COLOR = "#1a5a1a"; // Darker green for transparent faces
+const TRANSPARENT_FACE_ALPHA = 0.25;   // Slightly darker transparent faces
 
 // ============================================
 // CAMERA SETTINGS (can be modified via UI)
@@ -30,6 +35,25 @@ const CAMERA = {
     
     // Camera distance from origin
     distance: 1.0,
+    
+    // Render mode settings
+    render: {
+        mode: 'wireframe',     // 'wireframe' or 'solid'
+        solidType: 'opaque',   // 'transparent' (stacking) or 'opaque' (depth-sorted)
+        showEdges: true,       // Show wireframe edges on solid mode
+        showSilhouette: true   // Show silhouette/outline in all modes
+    },
+    
+    // Backface Culling settings (hides faces facing away based on winding order)
+    backfaceCull: {
+        enabled: false
+    },
+    
+    // Depth Culling settings (hides faces behind model center)
+    depthCull: {
+        enabled: false,
+        threshold: 0  // -1 to 1, where 0 is model center
+    }
 };
 
 // ============================================
@@ -46,16 +70,28 @@ const pitchSlider = document.getElementById('pitch-slider');
 const pitchValue = document.getElementById('pitch-value');
 const speedSlider = document.getElementById('speed-slider');
 const speedValue = document.getElementById('speed-value');
+const rotationSlider = document.getElementById('rotation-slider');
+const rotationValue = document.getElementById('rotation-value');
 const fileInput = document.getElementById('file-input');
 const loadBtn = document.getElementById('load-btn');
 const modelNameEl = document.getElementById('model-name');
 const convertBtn = document.getElementById('convert-btn');
 const convertFileInput = document.getElementById('convert-file-input');
+const backfaceCullToggle = document.getElementById('backface-cull-toggle');
+const depthCullToggle = document.getElementById('depth-cull-toggle');
+const depthThresholdSlider = document.getElementById('depth-threshold-slider');
+const depthThresholdValue = document.getElementById('depth-threshold-value');
+const depthThresholdBox = document.getElementById('depth-threshold-box');
+const renderModeToggle = document.getElementById('render-mode-toggle');
+const showEdgesToggle = document.getElementById('show-edges-toggle');
+const solidTypeToggle = document.getElementById('solid-type-toggle');
+const showSilhouetteToggle = document.getElementById('show-silhouette-toggle');
 
 // Control containers for scroll support
 const zoomBox = document.getElementById('zoom-box');
 const pitchControl = document.getElementById('pitch-control');
 const speedControl = document.getElementById('speed-control');
+const rotationControl = document.getElementById('rotation-control');
 
 // ============================================
 // 3D Model Converter (Browser-based)
@@ -576,8 +612,45 @@ addScrollSupport(zoomBox, zoomSlider, zoomValue, v => `${v.toFixed(1)}x`, v => {
     if (CAMERA.type === 'perspective') CAMERA.perspectiveZoom = v;
     else CAMERA.orthoZoom = v;
 });
-addScrollSupport(pitchControl, pitchSlider, pitchValue, v => `${Math.round(v)}°`, v => CAMERA.pitch = Math.round(v));
 addScrollSupport(speedControl, speedSlider, speedValue, v => `${v.toFixed(1)}x`, v => CAMERA.rotationSpeed = v);
+
+// Pitch scroll support with wrapping (0-360)
+pitchControl.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const step = 5; // 5 degree steps
+    let val = parseFloat(pitchSlider.value);
+    
+    val += e.deltaY < 0 ? step : -step;
+    // Wrap around 0-360
+    if (val >= 360) val -= 360;
+    if (val < 0) val += 360;
+    
+    pitchSlider.value = val;
+    pitchValue.textContent = `${Math.round(val)}°`;
+    CAMERA.pitch = Math.round(val);
+}, { passive: false });
+
+// Rotation scroll support with wrapping
+rotationControl.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const step = 5; // 5 degree steps
+    let val = parseFloat(rotationSlider.value);
+    
+    val += e.deltaY < 0 ? step : -step;
+    // Wrap around 0-360
+    if (val >= 360) val -= 360;
+    if (val < 0) val += 360;
+    
+    rotationSlider.value = val;
+    rotationValue.textContent = `${Math.round(val)}°`;
+    // Update the actual angle (convert degrees to radians)
+    angle = val * Math.PI / 180;
+}, { passive: false });
+addScrollSupport(depthThresholdBox, depthThresholdSlider, depthThresholdValue, v => `${v.toFixed(1)}`, v => CAMERA.depthCull.threshold = v);
 
 let savedSpeed = 0.5;
 
@@ -632,9 +705,14 @@ zoomSlider.addEventListener('input', (e) => {
     zoomValue.textContent = `${value.toFixed(1)}x`;
 });
 
-// Pitch slider
+// Pitch slider with wrapping (0-360)
 pitchSlider.addEventListener('input', (e) => {
-    CAMERA.pitch = parseInt(e.target.value);
+    let val = parseFloat(e.target.value);
+    // Wrap around 0-360
+    if (val >= 360) val = 0;
+    if (val < 0) val = 360 + val;
+    pitchSlider.value = val;
+    CAMERA.pitch = Math.round(val);
     pitchValue.textContent = `${CAMERA.pitch}°`;
 });
 
@@ -643,6 +721,111 @@ speedSlider.addEventListener('input', (e) => {
     CAMERA.rotationSpeed = parseFloat(e.target.value);
     speedValue.textContent = `${CAMERA.rotationSpeed.toFixed(1)}x`;
 });
+
+// Rotation slider
+rotationSlider.addEventListener('input', (e) => {
+    let val = parseFloat(e.target.value);
+    // Wrap around 0-360
+    if (val >= 360) val = 0;
+    if (val < 0) val = 360 + val;
+    rotationSlider.value = val;
+    rotationValue.textContent = `${Math.round(val)}°`;
+    // Update the actual angle (convert degrees to radians)
+    angle = val * Math.PI / 180;
+});
+
+// ============================================
+// Culling Controls
+// ============================================
+if (backfaceCullToggle) {
+    backfaceCullToggle.addEventListener('click', () => {
+        CAMERA.backfaceCull.enabled = !CAMERA.backfaceCull.enabled;
+        backfaceCullToggle.classList.toggle('active', CAMERA.backfaceCull.enabled);
+        backfaceCullToggle.textContent = CAMERA.backfaceCull.enabled ? 'On' : 'Off';
+    });
+}
+
+if (depthCullToggle) {
+    depthCullToggle.addEventListener('click', () => {
+        CAMERA.depthCull.enabled = !CAMERA.depthCull.enabled;
+        depthCullToggle.classList.toggle('active', CAMERA.depthCull.enabled);
+        depthCullToggle.textContent = CAMERA.depthCull.enabled ? 'On' : 'Off';
+        // Show/hide depth threshold slider
+        if (depthThresholdBox) {
+            depthThresholdBox.style.display = CAMERA.depthCull.enabled ? 'flex' : 'none';
+        }
+    });
+}
+
+// Depth threshold slider
+if (depthThresholdSlider) {
+    depthThresholdSlider.addEventListener('input', () => {
+        CAMERA.depthCull.threshold = parseFloat(depthThresholdSlider.value);
+        if (depthThresholdValue) {
+            depthThresholdValue.textContent = CAMERA.depthCull.threshold.toFixed(1);
+        }
+    });
+}
+
+// ============================================
+// Render Mode Controls (Wireframe / Solid)
+// ============================================
+function updateRenderModeUI() {
+    const isSolid = CAMERA.render.mode === 'solid';
+    
+    if (renderModeToggle) {
+        renderModeToggle.textContent = isSolid ? 'Solid' : 'Wire';
+        renderModeToggle.classList.toggle('active', isSolid);
+    }
+    
+    if (showEdgesToggle) {
+        showEdgesToggle.style.display = isSolid ? 'inline-block' : 'none';
+        showEdgesToggle.classList.toggle('active', CAMERA.render.showEdges);
+        showEdgesToggle.textContent = CAMERA.render.showEdges ? 'Edges' : 'No Edge';
+    }
+    
+    if (solidTypeToggle) {
+        solidTypeToggle.style.display = isSolid ? 'inline-block' : 'none';
+        const isOpaque = CAMERA.render.solidType === 'opaque';
+        solidTypeToggle.classList.toggle('active', isOpaque);
+        solidTypeToggle.textContent = isOpaque ? 'Opaque' : 'Trans';
+    }
+}
+
+if (renderModeToggle) {
+    renderModeToggle.addEventListener('click', () => {
+        CAMERA.render.mode = CAMERA.render.mode === 'wireframe' ? 'solid' : 'wireframe';
+        updateRenderModeUI();
+    });
+}
+
+if (showEdgesToggle) {
+    showEdgesToggle.addEventListener('click', () => {
+        CAMERA.render.showEdges = !CAMERA.render.showEdges;
+        showEdgesToggle.classList.toggle('active', CAMERA.render.showEdges);
+        showEdgesToggle.textContent = CAMERA.render.showEdges ? 'Edges' : 'No Edge';
+    });
+}
+
+if (solidTypeToggle) {
+    solidTypeToggle.addEventListener('click', () => {
+        CAMERA.render.solidType = CAMERA.render.solidType === 'opaque' ? 'transparent' : 'opaque';
+        const isOpaque = CAMERA.render.solidType === 'opaque';
+        solidTypeToggle.classList.toggle('active', isOpaque);
+        solidTypeToggle.textContent = isOpaque ? 'Opaque' : 'Trans';
+    });
+}
+
+if (showSilhouetteToggle) {
+    showSilhouetteToggle.addEventListener('click', () => {
+        CAMERA.render.showSilhouette = !CAMERA.render.showSilhouette;
+        showSilhouetteToggle.classList.toggle('active', CAMERA.render.showSilhouette);
+        showSilhouetteToggle.textContent = CAMERA.render.showSilhouette ? 'Silhouette' : 'No Sil';
+    });
+}
+
+// Initialize render mode UI
+updateRenderModeUI();
 
 // ============================================
 // Initialize sliders to match CAMERA defaults
@@ -663,10 +846,102 @@ function initSliders() {
     // Speed slider
     speedSlider.value = CAMERA.rotationSpeed;
     speedValue.textContent = `${CAMERA.rotationSpeed.toFixed(1)}x`;
+    
+    // Rotation slider (starts at 0)
+    rotationSlider.value = 0;
+    rotationValue.textContent = `0°`;
 }
 
 // Initialize sliders on load
 initSliders();
+
+// ============================================
+// Mouse drag rotation (like Blender orbit)
+// ============================================
+let isDragging = false;
+let lastMouseX = 0;
+let lastMouseY = 0;
+let savedSpeedDuringDrag = 0;
+
+game.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    // Pause rotation while dragging
+    savedSpeedDuringDrag = CAMERA.rotationSpeed;
+    CAMERA.rotationSpeed = 0;
+    speedSlider.value = 0;
+    speedValue.textContent = '0.0x';
+    game.style.cursor = 'grabbing';
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    
+    const deltaX = e.clientX - lastMouseX;
+    const deltaY = e.clientY - lastMouseY;
+    lastMouseX = e.clientX;
+    lastMouseY = e.clientY;
+    
+    // Sensitivity factor (degrees per pixel)
+    const sensitivity = 0.5;
+    
+    // Update rotation (horizontal drag = Y-axis rotation)
+    let rotationDeg = (angle * 180 / Math.PI) + deltaX * sensitivity;
+    // Wrap to 0-360
+    while (rotationDeg >= 360) rotationDeg -= 360;
+    while (rotationDeg < 0) rotationDeg += 360;
+    angle = rotationDeg * Math.PI / 180;
+    rotationSlider.value = Math.round(rotationDeg);
+    rotationValue.textContent = `${Math.round(rotationDeg)}°`;
+    
+    // Update pitch (vertical drag = X-axis rotation)
+    let pitchDeg = CAMERA.pitch + deltaY * sensitivity;
+    // Wrap to 0-360
+    while (pitchDeg >= 360) pitchDeg -= 360;
+    while (pitchDeg < 0) pitchDeg += 360;
+    CAMERA.pitch = Math.round(pitchDeg);
+    pitchSlider.value = CAMERA.pitch;
+    pitchValue.textContent = `${CAMERA.pitch}°`;
+});
+
+document.addEventListener('mouseup', () => {
+    if (isDragging) {
+        isDragging = false;
+        game.style.cursor = 'grab';
+    }
+});
+
+// Set initial cursor style
+game.style.cursor = 'grab';
+
+// ============================================
+// Canvas scroll zoom
+// ============================================
+game.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    
+    const step = 0.1;
+    const min = 0.2;
+    const max = 3.0;
+    
+    // Get current zoom for active mode
+    let currentZoom = CAMERA.type === 'perspective' ? CAMERA.perspectiveZoom : CAMERA.orthoZoom;
+    
+    // Scroll up = zoom in, scroll down = zoom out
+    let newZoom = currentZoom + (e.deltaY < 0 ? step : -step);
+    newZoom = Math.max(min, Math.min(max, newZoom));
+    
+    // Update camera and slider
+    if (CAMERA.type === 'perspective') {
+        CAMERA.perspectiveZoom = newZoom;
+    } else {
+        CAMERA.orthoZoom = newZoom;
+    }
+    
+    zoomSlider.value = newZoom;
+    zoomValue.textContent = `${newZoom.toFixed(1)}x`;
+}, { passive: false });
 
 // ============================================
 // Derived camera values
@@ -690,7 +965,30 @@ let vsFlat = null;
 let edges = [];
 let transformedX = null;
 let transformedY = null;
+let transformedZ = null; // Z-depth buffer for culling
 let modelLoaded = false;
+
+// Optimized z-culling data structures (pre-allocated)
+let faceCount = 0;
+let faceIndices = null;      // Flat array of face vertex indices
+let faceOffsets = null;      // Start offset for each face in faceIndices
+let faceLengths = null;      // Number of vertices per face
+let faceNormalsFlat = null;  // Flat array: [nx, ny, nz, nx, ny, nz, ...]
+let faceAvgZ = null;         // Average Z per face (Float32Array)
+let faceVisible = null;      // Visibility flag per face (Uint8Array)
+let faceIsFrontFacing = null; // Cache: is each face front-facing (Uint8Array)
+let faceSortIndices = null;  // Pre-allocated sort indices
+let edgeVisibility = null;   // Pre-allocated edge visibility (Uint8Array)
+let edgeToFaces = null;      // Map edge index -> [faceIndex1, faceIndex2, ...]
+let minVisibleFaceZ = Infinity; // Track minimum Z of rendered faces for silhouette culling
+
+// Performance Optimization: Reusable global buffers to avoid per-frame allocation
+let faceBBoxMinX = null;
+let faceBBoxMaxX = null;
+let faceBBoxMinY = null;
+let faceBBoxMaxY = null;
+const GRID_RES = 800; // Resolution for silhouette depth grid
+let depthGrid = null; // Reusable depth grid buffer
 
 // Global model data (will be populated when a model is loaded)
 let vs = null;
@@ -714,17 +1012,22 @@ function initModel() {
         vsFlat[i * 3 + 2] = vs[i].z;
     }
     
-    // Build unique edge list
-    const edgeSet = new Set();
+    // Build unique edge list with integer keys for fast lookup
+    const edgeMap = new Map(); // key -> edge index
     edges = [];
+    
+    function getEdgeKey(a, b) {
+        // Create unique integer key for edge (works for up to ~65k vertices)
+        return a < b ? (a * 65536 + b) : (b * 65536 + a);
+    }
     
     for (const f of fs) {
         for (let i = 0; i < f.length; ++i) {
             const a = f[i];
             const b = f[(i + 1) % f.length];
-            const key = a < b ? `${a}-${b}` : `${b}-${a}`;
-            if (!edgeSet.has(key)) {
-                edgeSet.add(key);
+            const key = getEdgeKey(a, b);
+            if (!edgeMap.has(key)) {
+                edgeMap.set(key, edges.length);
                 edges.push([a, b]);
             }
         }
@@ -733,9 +1036,111 @@ function initModel() {
     // Pre-allocated transformation buffers
     transformedX = new Float32Array(vertexCount);
     transformedY = new Float32Array(vertexCount);
+    transformedZ = new Float32Array(vertexCount);
+    
+    // Count valid faces and total indices
+    faceCount = 0;
+    let totalFaceIndices = 0;
+    for (let i = 0; i < fs.length; i++) {
+        if (fs[i].length >= 3) {
+            faceCount++;
+            totalFaceIndices += fs[i].length;
+        }
+    }
+    
+    // Pre-allocate face data as flat typed arrays
+    faceIndices = new Uint32Array(totalFaceIndices);
+    faceOffsets = new Uint32Array(faceCount);
+    faceLengths = new Uint8Array(faceCount);
+    faceNormalsFlat = new Float32Array(faceCount * 3);
+    faceAvgZ = new Float32Array(faceCount);
+    faceVisible = new Uint8Array(faceCount);
+    faceIsFrontFacing = new Uint8Array(faceCount);
+    faceSortIndices = new Uint32Array(faceCount);
+    edgeVisibility = new Uint8Array(edges.length);
+    
+    // Performance Optimization: Reusable face bounds arrays (limit GC)
+    // Only re-allocate if the new model is larger than current capacity
+    if (!faceBBoxMinX || faceBBoxMinX.length < faceCount) {
+        faceBBoxMinX = new Float32Array(faceCount);
+        faceBBoxMaxX = new Float32Array(faceCount);
+        faceBBoxMinY = new Float32Array(faceCount);
+        faceBBoxMaxY = new Float32Array(faceCount);
+    }
+    
+    // Performance Optimization: Reusable depth grid for silhouettes
+    if (!depthGrid) {
+        depthGrid = new Float32Array(GRID_RES * GRID_RES);
+    }
+    
+    // Build edge-to-faces mapping (which faces share each edge)
+    edgeToFaces = new Array(edges.length);
+    for (let i = 0; i < edges.length; i++) {
+        edgeToFaces[i] = [];
+    }
+    
+    let faceIdx = 0;
+    let indexOffset = 0;
+    
+    for (let i = 0; i < fs.length; i++) {
+        const f = fs[i];
+        if (f.length < 3) continue;
+        
+        // Store face indices
+        faceOffsets[faceIdx] = indexOffset;
+        faceLengths[faceIdx] = f.length;
+        for (let j = 0; j < f.length; j++) {
+            faceIndices[indexOffset + j] = f[j];
+        }
+        
+        // Map edges to this face
+        for (let j = 0; j < f.length; j++) {
+            const a = f[j];
+            const b = f[(j + 1) % f.length];
+            const key = getEdgeKey(a, b);
+            const edgeIdx = edgeMap.get(key);
+            if (edgeIdx !== undefined) {
+                edgeToFaces[edgeIdx].push(faceIdx);
+            }
+        }
+        
+        // Compute face normal using first 3 vertices
+        const v0 = vs[f[0]];
+        const v1 = vs[f[1]];
+        const v2 = vs[f[2]];
+        
+        // Edge vectors
+        const ax = v1.x - v0.x, ay = v1.y - v0.y, az = v1.z - v0.z;
+        const bx = v2.x - v0.x, by = v2.y - v0.y, bz = v2.z - v0.z;
+        
+        // Cross product for normal
+        let nx = ay * bz - az * by;
+        let ny = az * bx - ax * bz;
+        let nz = ax * by - ay * bx;
+        
+        // Normalize
+        const len = Math.sqrt(nx * nx + ny * ny + nz * nz);
+        if (len > 0) {
+            nx /= len;
+            ny /= len;
+            nz /= len;
+        } else {
+            nx = 0; ny = 0; nz = 1;
+        }
+        
+        faceNormalsFlat[faceIdx * 3] = nx;
+        faceNormalsFlat[faceIdx * 3 + 1] = ny;
+        faceNormalsFlat[faceIdx * 3 + 2] = nz;
+        
+        // Initialize sort indices
+        faceSortIndices[faceIdx] = faceIdx;
+        
+        indexOffset += f.length;
+        faceIdx++;
+    }
     
     modelLoaded = true;
-    console.log(`Loaded: ${vertexCount} vertices, ${edges.length} unique edges`);
+    console.log(`Loaded: ${vertexCount} vertices, ${edges.length} edges, ${faceCount} faces`);
 }
 
 // ============================================
@@ -823,6 +1228,40 @@ const halfWidth = game.width / 2;
 const halfHeight = game.height / 2;
 
 // ============================================
+// Performance Optimizations
+// ============================================
+
+// Pre-computed constants
+const DEG_TO_RAD = Math.PI / 180;
+const RAD_TO_DEG = 180 / Math.PI;
+const TWO_PI = Math.PI * 2;
+const ANGLE_STEP = Math.PI / 60;
+
+// Fast in-place quicksort for depth sorting (avoids callback overhead)
+function quickSortDepth(indices, depths, left, right) {
+    if (left >= right) return;
+    
+    const pivotIdx = indices[(left + right) >> 1];
+    const pivot = depths[pivotIdx];
+    let i = left, j = right;
+    
+    while (i <= j) {
+        while (depths[indices[i]] > pivot) i++;
+        while (depths[indices[j]] < pivot) j--;
+        if (i <= j) {
+            const tmp = indices[i];
+            indices[i] = indices[j];
+            indices[j] = tmp;
+            i++;
+            j--;
+        }
+    }
+    
+    if (left < j) quickSortDepth(indices, depths, left, j);
+    if (i < right) quickSortDepth(indices, depths, i, right);
+}
+
+// ============================================
 // Render functions
 // ============================================
 
@@ -836,7 +1275,7 @@ function transformAllVertices(angle, dz) {
     const sinY = Math.sin(angle);
     
     // Pitch rotation (around X axis) - negate so positive = looking from above
-    const pitchRad = -CAMERA.pitch * Math.PI / 180;
+    const pitchRad = -CAMERA.pitch * DEG_TO_RAD;
     const cosX = Math.cos(pitchRad);
     const sinX = Math.sin(pitchRad);
     
@@ -844,45 +1283,127 @@ function transformAllVertices(angle, dz) {
     const isPerspective = CAMERA.type === "perspective";
     const zoom = isPerspective ? CAMERA.perspectiveZoom : CAMERA.orthoZoom;
     
-    for (let i = 0; i < vertexCount; i++) {
-        const idx = i * 3;
-        const x = vsFlat[idx];
-        const y = vsFlat[idx + 1];
-        const z = vsFlat[idx + 2];
-        
-        // Rotate around Y axis (horizontal spin)
-        const rx = x * cosY - z * sinY;
-        const rz = x * sinY + z * cosY;
-        
-        // Rotate around X axis (pitch/elevation)
-        const ry = y * cosX - rz * sinX;
-        const rz2 = y * sinX + rz * cosX;
-        
-        // Translate Z
-        const tz = rz2 + dz;
-        
-        let px, py;
-        
-        if (isPerspective) {
+    // Cache typed array references and constants for hot loop
+    const vsF = vsFlat;
+    const txArr = transformedX;
+    const tyArr = transformedY;
+    const tzArr = transformedZ;
+    const hw = halfWidth;
+    const hh = halfHeight;
+    const vCount = vertexCount;
+    const focalZoom = focalScale * zoom;
+    
+    let sumZ = 0;
+    
+    if (isPerspective) {
+        // Perspective projection loop
+        for (let i = 0, idx = 0; i < vCount; i++, idx += 3) {
+            const x = vsF[idx];
+            const y = vsF[idx + 1];
+            const z = vsF[idx + 2];
+            
+            // Rotate around Y axis (horizontal spin)
+            const rx = x * cosY - z * sinY;
+            const rz = x * sinY + z * cosY;
+            
+            // Rotate around X axis (pitch/elevation)
+            const ry = y * cosX - rz * sinX;
+            const tz = y * sinX + rz * cosX + dz;
+            
+            tzArr[i] = tz;
+            sumZ += tz;
+            
             // Perspective: divide by Z with focal scale + zoom
-            const invZ = (focalScale * zoom) / tz;
-            px = rx * invZ;
-            py = ry * invZ;
-        } else {
-            // Orthographic: no depth effect
-            px = rx * zoom;
-            py = ry * zoom;
+            const invZ = focalZoom / tz;
+            txArr[i] = rx * invZ * hw + hw;
+            tyArr[i] = -ry * invZ * hh + hh;
         }
+    } else {
+        // Orthographic projection loop
+        const zoomHW = zoom * hw;
+        const zoomHH = zoom * hh;
         
-        transformedX[i] = px * halfWidth + halfWidth;
-        transformedY[i] = -py * halfHeight + halfHeight;
+        for (let i = 0, idx = 0; i < vCount; i++, idx += 3) {
+            const x = vsF[idx];
+            const y = vsF[idx + 1];
+            const z = vsF[idx + 2];
+            
+            // Rotate around Y axis (horizontal spin)
+            const rx = x * cosY - z * sinY;
+            const rz = x * sinY + z * cosY;
+            
+            // Rotate around X axis (pitch/elevation)
+            const ry = y * cosX - rz * sinX;
+            const tz = y * sinX + rz * cosX + dz;
+            
+            tzArr[i] = tz;
+            sumZ += tz;
+            
+            // Orthographic: no depth effect
+            txArr[i] = rx * zoomHW + hw;
+            tyArr[i] = -ry * zoomHH + hh;
+        }
     }
+    
+    // Update cached model center Z for backface culling
+    modelCenterZ = sumZ / vCount;
 }
 
 let angle = 0;
 let lastTime = performance.now();
 let frameCount = 0;
 let fps = 0;
+
+// Cached model center Z - updated each frame during transformAllVertices
+let modelCenterZ = 0;
+
+// Helper: Check if a face should be visible using depth-based culling
+// A face is visible if it's closer to the camera than the adjusted threshold
+// threshold: -1 (show more back) to 1 (show more front), 0 = model center
+function isFaceVisible(faceIdx) {
+    const offset = faceOffsets[faceIdx];
+    const len = faceLengths[faceIdx];
+    if (len < 3) return true;
+    
+    // Calculate average Z depth of this face
+    let faceAvgZ = 0;
+    for (let j = 0; j < len; j++) {
+        faceAvgZ += transformedZ[faceIndices[offset + j]];    }
+    faceAvgZ /= len;
+    
+    // Apply threshold offset to model center
+    // threshold ranges from -1 to 1, scale it to model size
+    // Negative threshold = show more of the back, Positive = show less
+    const thresholdZ = modelCenterZ + CAMERA.depthCull.threshold;
+    
+    // Face is visible if it's in front of (closer than) the threshold
+    // In view space, smaller Z = closer to camera
+    return faceAvgZ < thresholdZ;
+}
+
+// Helper: Check if a face is front-facing using screen-space signed area
+// Uses the cross product of two edges for winding order check
+function isFaceFrontFacing(faceIdx) {
+    const offset = faceOffsets[faceIdx];
+    const len = faceLengths[faceIdx];
+    if (len < 3) return true;
+    
+    // Get first 3 vertices
+    const v0 = faceIndices[offset];
+    const v1 = faceIndices[offset + 1];
+    const v2 = faceIndices[offset + 2];
+    
+    // Screen-space coordinates
+    const x0 = transformedX[v0], y0 = transformedY[v0];
+    const x1 = transformedX[v1], y1 = transformedY[v1];
+    const x2 = transformedX[v2], y2 = transformedY[v2];
+    
+    // Signed area (2D cross product)
+    // Positive signed area = front-facing (CW in screen space with Y-down)
+    const signedArea = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+    
+    return signedArea > 0;
+}
 
 function frame() {
     frameCount++;
@@ -893,25 +1414,690 @@ function frame() {
         lastTime = now;
     }
     
-    angle += (Math.PI / 60) * CAMERA.rotationSpeed;
+    const rotSpeed = CAMERA.rotationSpeed;
+    angle += ANGLE_STEP * rotSpeed;
+    
+    // Wrap angle to 0-2*PI range
+    if (angle >= TWO_PI) angle -= TWO_PI;
+    else if (angle < 0) angle += TWO_PI;
+    
+    // Update rotation slider to follow animation (when speed > 0)
+    if (CAMERA.rotationSpeed !== 0) {
+        const angleDeg = Math.round(angle * 180 / Math.PI);
+        rotationSlider.value = angleDeg;
+        rotationValue.textContent = `${angleDeg}°`;
+    }
+    
     clear();
     
     // Only render if model is loaded
     if (modelLoaded && vertexCount > 0) {
         transformAllVertices(angle, CAMERA.distance);
         
-        ctx.strokeStyle = FOREGROUND;
-        ctx.lineWidth = 0.3;
-        ctx.beginPath();
-        
-        const edgeCount = edges.length;
-        for (let i = 0; i < edgeCount; i++) {
-            const edge = edges[i];
-            ctx.moveTo(transformedX[edge[0]], transformedY[edge[0]]);
-            ctx.lineTo(transformedX[edge[1]], transformedY[edge[1]]);
+        if (CAMERA.render.mode === 'solid' && faceCount > 0) {
+            // SOLID MODE: Draw filled faces
+            const useBackfaceCull = CAMERA.backfaceCull.enabled;
+            const useDepthCull = CAMERA.depthCull.enabled;
+            const isTransparent = CAMERA.render.solidType === 'transparent';
+            
+            ctx.strokeStyle = FOREGROUND;
+            ctx.lineWidth = 0.3;
+            
+            if (isTransparent) {
+                // TRANSPARENT MODE: Semi-transparent faces that stack
+                // MUST use per-face fill() for proper alpha blending of overlapping faces
+                ctx.globalAlpha = TRANSPARENT_FACE_ALPHA;
+                ctx.fillStyle = TRANSPARENT_FACE_COLOR;
+                
+                // Cache array references for hot loop
+                const fOffsets = faceOffsets;
+                const fLengths = faceLengths;
+                const fIndices = faceIndices;
+                const txArr = transformedX;
+                const tyArr = transformedY;
+                const tzArr = transformedZ;
+                const fVisible = faceVisible;
+                const fCount = faceCount;
+                // Pre-calculate threshold Z
+                const thresholdZ = modelCenterZ + CAMERA.depthCull.threshold;
+                
+                // Determine visibility and draw each face individually (for proper alpha stacking)
+                const viewW = game.width;
+                const viewH = game.height;
+
+                for (let i = 0; i < fCount; i++) {
+                    const offset = fOffsets[i];
+                    const len = fLengths[i];
+                    const v0 = fIndices[offset];
+                    
+                    // 1. INLINED Front Check (Signed Area)
+                    const next1 = fIndices[offset + 1];
+                    const next2 = fIndices[offset + 2];
+                    const x0 = txArr[v0], y0 = tyArr[v0];
+                    const x1 = txArr[next1], y1 = tyArr[next1];
+                    const x2 = txArr[next2], y2 = tyArr[next2];
+                    const signedArea = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+                    const isFront = signedArea > 0;
+                    
+                    if (useBackfaceCull && !isFront) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+                    
+                    // 2. INLINED Depth & Tiny Face Check (Single Pass)
+                    let sumZ = tzArr[v0];
+                    let minX = x0, maxX = x0;
+                    let minY = y0, maxY = y0;
+                    
+                    for (let j = 1; j < len; j++) {
+                        const v = fIndices[offset + j];
+                        const x = txArr[v], y = tyArr[v], z = tzArr[v];
+                        sumZ += z;
+                        if (x < minX) minX = x; else if (x > maxX) maxX = x;
+                        if (y < minY) minY = y; else if (y > maxY) maxY = y;
+                    }
+                    
+                    // Viewport Culling (Strict 2D Frustum Check)
+                    if (maxX < 0 || minX > viewW || maxY < 0 || minY > viewH) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+
+                    // Check depth threshold
+                    if (useDepthCull && (sumZ / len) >= thresholdZ) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+                    
+                    // Skip tiny faces (< 2x2 pixels)
+                    if ((maxX - minX) < 2 && (maxY - minY) < 2) {
+                         fVisible[i] = 0;
+                         continue;
+                    }
+                    
+                    fVisible[i] = 1;
+                    
+                    // Draw each face individually so overlapping areas stack alpha
+                    // OPTIMIZATION: Use integer coordinates for faster canvas rasterization
+                    ctx.beginPath();
+                    ctx.moveTo(x0 | 0, y0 | 0);
+                    for (let j = 1; j < len; j++) {
+                        const vert = fIndices[offset + j];
+                        ctx.lineTo(txArr[vert] | 0, tyArr[vert] | 0);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                }
+                
+                ctx.globalAlpha = 1.0;
+            } else {
+                // OPAQUE MODE: Draw solid faces with proper hidden-line removal
+                // 
+                // APPROACH: Per-edge occlusion testing
+                // - For each silhouette edge, check if it's occluded by ANY front-facing face
+                // - Use ALL front-facing faces for occlusion (not affected by depth culling)
+                // - Only draw silhouettes that are NOT occluded
+                //
+                const showEdges = CAMERA.render.showEdges;
+                const showSilhouette = CAMERA.render.showSilhouette;
+                const viewW = game.width;
+                const viewH = game.height;
+                
+                // Cache array references for hot loop
+                const fOffsets = faceOffsets;
+                const fLengths = faceLengths;
+                const fIndices = faceIndices;
+                const txArr = transformedX;
+                const tyArr = transformedY;
+                const tzArr = transformedZ;
+                const fAvgZ = faceAvgZ;
+                const fVisible = faceVisible;
+                const fIsFront = faceIsFrontFacing;
+                const fSortIdx = faceSortIndices;
+                const fCount = faceCount;
+                
+                // Pre-compute face bounding boxes and Z for occlusion testing
+                // These are used for ALL front-facing faces (not just visible ones)
+                // NOTE: Globals faceBBoxMinX etc are used (reused) here
+                
+                // Calculate front-facing state and avgZ for ALL faces
+                let visibleCount = 0;
+                const thresholdZ = modelCenterZ + CAMERA.depthCull.threshold;
+                
+                for (let i = 0; i < fCount; i++) {
+                    const offset = fOffsets[i];
+                    const len = fLengths[i];
+                    const v0 = fIndices[offset];
+                    
+                    // 1. INLINED Front Check
+                    const v1 = fIndices[offset + 1], v2 = fIndices[offset + 2];
+                    const x0 = txArr[v0], y0 = tyArr[v0];
+                    const signedArea = (txArr[v1] - x0) * (tyArr[v2] - y0) - (txArr[v2] - x0) * (tyArr[v1] - y0);
+                    const isFront = signedArea > 0;
+                    fIsFront[i] = isFront ? 1 : 0;
+                    
+                    // 2. INLINED AvgZ + BBox (Single Pass)
+                    let sumZ = tzArr[v0];
+                    let minX = x0, maxX = x0;
+                    let minY = y0, maxY = y0;
+                    
+                    for (let j = 1; j < len; j++) {
+                        const v = fIndices[offset + j];
+                        const x = txArr[v], y = tyArr[v], z = tzArr[v];
+                        sumZ += z;
+                        if (x < minX) minX = x; else if (x > maxX) maxX = x;
+                        if (y < minY) minY = y; else if (y > maxY) maxY = y;
+                    }
+                    
+                    fAvgZ[i] = sumZ / len;
+                    faceBBoxMinX[i] = minX; faceBBoxMaxX[i] = maxX;
+                    faceBBoxMinY[i] = minY; faceBBoxMaxY[i] = maxY;
+                    
+                    // Check visibility for rendering (respects culling toggles)
+                    if (useBackfaceCull && !isFront) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+
+                    // Viewport Culling (Strict 2D Frustum Check) - BIG PERFORMANCE WIN
+                    if (maxX < 0 || minX > viewW || maxY < 0 || minY > viewH) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+
+                    if (useDepthCull && fAvgZ[i] >= thresholdZ) {
+                        fVisible[i] = 0;
+                        continue;
+                    }
+                    
+                    fVisible[i] = 1;
+                    fSortIdx[visibleCount++] = i;
+                }
+                
+                // Sort visible faces by depth (back-to-front)
+                if (visibleCount > 1) {
+                    quickSortDepth(fSortIdx, fAvgZ, 0, visibleCount - 1);
+                }
+                
+                // Draw faces back-to-front
+                ctx.fillStyle = FACE_COLOR;
+                ctx.strokeStyle = FOREGROUND;
+                ctx.lineWidth = 0.3;
+                
+                for (let s = 0; s < visibleCount; s++) {
+                    const i = fSortIdx[s];
+                    const offset = fOffsets[i];
+                    const len = fLengths[i];
+                    
+                    ctx.beginPath();
+                    const firstVert = fIndices[offset];
+                    // OPTIMIZATION: Use integer coordinates
+                    ctx.moveTo(txArr[firstVert] | 0, tyArr[firstVert] | 0);
+                    for (let j = 1; j < len; j++) {
+                        const vert = fIndices[offset + j];
+                        ctx.lineTo(txArr[vert] | 0, tyArr[vert] | 0);
+                    }
+                    ctx.closePath();
+                    ctx.fill();
+                    if (showEdges) ctx.stroke();
+                }
+                
+                // Draw silhouettes with depth-map based occlusion and edge splitting
+                // Build a depth grid from ALL front-facing faces using SCANLINE RASTERIZATION
+                // with proper per-pixel Z interpolation via barycentric coordinates
+                if (showSilhouette) {
+                    // Optimized: Reuse global depthGrid (allocated in initModel)
+                    depthGrid.fill(Infinity);
+                    
+                    const canvasW = game.width;
+                    const canvasH = game.height;
+                    const scaleX = GRID_RES / canvasW;
+                    const scaleY = GRID_RES / canvasH;
+                    
+                    // Track min/max Z for relative tolerance
+                    let minFrontZ = Infinity, maxFrontZ = -Infinity;
+                    
+                    // Optimized scanline triangle rasterization with Z interpolation
+                    // Uses horizontal scanlines and edge walking for efficiency
+                    for (let f = 0; f < fCount; f++) {
+                        // OPAQUE MODE: Only consider front-facing faces for occlusion
+                        if (!fIsFront[f]) continue;
+                        
+                        const offset = fOffsets[f];
+                        const len = fLengths[f];
+                        if (len < 3) continue;
+                        
+                        // Track Z range
+                        const faceZ = fAvgZ[f];
+                        if (faceZ < minFrontZ) minFrontZ = faceZ;
+                        if (faceZ > maxFrontZ) maxFrontZ = faceZ;
+                        
+                        // Fan triangulation for n-gons
+                        for (let tri = 0; tri < len - 2; tri++) {
+                            const vi0 = fIndices[offset];
+                            const vi1 = fIndices[offset + tri + 1];
+                            const vi2 = fIndices[offset + tri + 2];
+                            
+                            // Get coordinates in grid space and Z values
+                            let gx0 = txArr[vi0] * scaleX, gy0 = tyArr[vi0] * scaleY, gz0 = tzArr[vi0];
+                            let gx1 = txArr[vi1] * scaleX, gy1 = tyArr[vi1] * scaleY, gz1 = tzArr[vi1];
+                            let gx2 = txArr[vi2] * scaleX, gy2 = tyArr[vi2] * scaleY, gz2 = tzArr[vi2];
+                            
+                            // Sort vertices by Y (gy0 <= gy1 <= gy2)
+                            if (gy0 > gy1) { let t = gx0; gx0 = gx1; gx1 = t; t = gy0; gy0 = gy1; gy1 = t; t = gz0; gz0 = gz1; gz1 = t; }
+                            if (gy1 > gy2) { let t = gx1; gx1 = gx2; gx2 = t; t = gy1; gy1 = gy2; gy2 = t; t = gz1; gz1 = gz2; gz2 = t; }
+                            if (gy0 > gy1) { let t = gx0; gx0 = gx1; gx1 = t; t = gy0; gy0 = gy1; gy1 = t; t = gz0; gz0 = gz1; gz1 = t; }
+                            
+                            // Skip degenerate triangles
+                            const totalHeight = gy2 - gy0;
+                            if (totalHeight < 0.0001) continue;
+                            
+                            // Clamp to grid bounds
+                            const minY = Math.max(0, Math.ceil(gy0));
+                            const maxY = Math.min(GRID_RES - 1, Math.floor(gy2));
+                            
+                            // Pre-compute edge slopes
+                            const invTotalHeight = 1.0 / totalHeight;
+                            const topHeight = gy1 - gy0;
+                            const bottomHeight = gy2 - gy1;
+                            const hasTopHalf = topHeight > 0.0001;
+                            const hasBottomHalf = bottomHeight > 0.0001;
+                            
+                            // Scanline rasterization
+                            for (let y = minY; y <= maxY; y++) {
+                                const yf = y + 0.5;
+                                
+                                // Compute X intercepts on the two edges
+                                // Long edge: v0 -> v2 (always present)
+                                const tLong = (yf - gy0) * invTotalHeight;
+                                const xLong = gx0 + (gx2 - gx0) * tLong;
+                                const zLong = gz0 + (gz2 - gz0) * tLong;
+                                
+                                // Short edge depends on which half we're in
+                                let xShort, zShort;
+                                if (yf < gy1 && hasTopHalf) {
+                                    // Top half: v0 -> v1
+                                    const tShort = (yf - gy0) / topHeight;
+                                    xShort = gx0 + (gx1 - gx0) * tShort;
+                                    zShort = gz0 + (gz1 - gz0) * tShort;
+                                } else if (hasBottomHalf) {
+                                    // Bottom half: v1 -> v2
+                                    const tShort = (yf - gy1) / bottomHeight;
+                                    xShort = gx1 + (gx2 - gx1) * tShort;
+                                    zShort = gz1 + (gz2 - gz1) * tShort;
+                                } else if (hasTopHalf) {
+                                    const tShort = (yf - gy0) / topHeight;
+                                    xShort = gx0 + (gx1 - gx0) * tShort;
+                                    zShort = gz0 + (gz1 - gz0) * tShort;
+                                } else {
+                                    continue;
+                                }
+                                
+                                // Ensure xLeft <= xRight
+                                let xLeft, xRight, zLeft, zRight;
+                                if (xLong < xShort) {
+                                    xLeft = xLong; xRight = xShort;
+                                    zLeft = zLong; zRight = zShort;
+                                } else {
+                                    xLeft = xShort; xRight = xLong;
+                                    zLeft = zShort; zRight = zLong;
+                                }
+                                
+                                // Clamp X to grid bounds
+                                const startX = Math.max(0, Math.ceil(xLeft));
+                                const endX = Math.min(GRID_RES - 1, Math.floor(xRight));
+                                
+                                if (startX > endX) continue;
+                                
+                                // Interpolate Z along the scanline
+                                const spanWidth = xRight - xLeft;
+                                const rowOffset = y * GRID_RES;
+                                
+                                if (spanWidth < 0.0001) {
+                                    // Very thin span - use average Z
+                                    const z = (zLeft + zRight) * 0.5;
+                                    for (let x = startX; x <= endX; x++) {
+                                        const idx = rowOffset + x;
+                                        if (z < depthGrid[idx]) depthGrid[idx] = z;
+                                    }
+                                } else {
+                                    const invSpanWidth = 1.0 / spanWidth;
+                                    for (let x = startX; x <= endX; x++) {
+                                        const t = (x + 0.5 - xLeft) * invSpanWidth;
+                                        const z = zLeft + (zRight - zLeft) * t;
+                                        const idx = rowOffset + x;
+                                        if (z < depthGrid[idx]) depthGrid[idx] = z;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Relative tolerance for depth comparison
+                    const depthRange = maxFrontZ - minFrontZ;
+                    
+                    // "Tight" Tolerance for avoiding background bleed-through (0.3%)
+                    const TIGHT_TOLERANCE = Math.max(0.003, depthRange * 0.003);
+                    
+                    // "Background" Threshold for detecting significant depth gaps (5%)
+                    // If a sample is this much deeper than the edge, it's definitely a background surface
+                    const BACKGROUND_THRESHOLD = Math.max(0.05, depthRange * 0.05);
+                    
+                    // Helper: sample depth grid with bounds check
+                    function sampleDepthGrid(x, y) {
+                        const gx = Math.max(0, Math.min(GRID_RES - 1, Math.floor(x * scaleX)));
+                        const gy = Math.max(0, Math.min(GRID_RES - 1, Math.floor(y * scaleY)));
+                        return depthGrid[gy * GRID_RES + gx];
+                    }
+                    
+                    // Multi-sample visibility check with perpendicular offset
+                    // This helps avoid self-occlusion where silhouette edges meet their own front faces
+                    function isEdgePointVisible(px, py, pz, nx, ny) {
+                        // Sample at center and offset perpendicular to edge direction
+                        // Restore reasonable offset to sample neighborhood (not single pixel)
+                        const OFFSET = 1.0; 
+                        
+                        // Helper to classify sample visibility
+                        function checkSample(d) {
+                            if (d === Infinity) return 2; // Strong Pass (Open Space)
+                            const diff = d - pz;
+                            if (diff > BACKGROUND_THRESHOLD) return 2; // Strong Pass (Background Surface)
+                            if (diff >= -TIGHT_TOLERANCE) return 1; // Weak Pass (Self/Surface)
+                            return 0; // Fail (Occluded)
+                        }
+
+                        // Collect votes
+                        const v0 = checkSample(sampleDepthGrid(px, py));
+                        const v1 = checkSample(sampleDepthGrid(px + nx * OFFSET, py + ny * OFFSET));
+                        const v2 = checkSample(sampleDepthGrid(px - nx * OFFSET, py - ny * OFFSET));
+                        
+                        // Logic:
+                        // - If ANY sample is a "Strong Pass" (Background/Infinity), the edge is on a silhouette boundary -> SHOW IT.
+                        // - Otherwise, require Majority (2+) "Weak Passes" to confirm it's a visible surface detail.
+                        
+                        if (v0 === 2 || v1 === 2 || v2 === 2) return true;
+                        
+                        // Count weak passes
+                        const weakVotes = (v0 >= 1 ? 1 : 0) + (v1 >= 1 ? 1 : 0) + (v2 >= 1 ? 1 : 0);
+                        return weakVotes >= 2;
+                    }
+                    
+                    ctx.beginPath();
+                    ctx.strokeStyle = FOREGROUND;
+                    ctx.lineWidth = 0.6;
+                    
+                    const edgeLen = edges.length;
+                    
+                    for (let i = 0; i < edgeLen; i++) {
+                        const adjacentFaces = edgeToFaces[i];
+                        const edge = edges[i];
+                        
+                        // Determine if this is a silhouette edge
+                        let isSilhouette = false;
+                        if (adjacentFaces.length === 1) {
+                            // Boundary edge: visible if face is front
+                             isSilhouette = fIsFront[adjacentFaces[0]] === 1;
+                        } else if (adjacentFaces.length === 2) {
+                            isSilhouette = fIsFront[adjacentFaces[0]] !== fIsFront[adjacentFaces[1]];
+                        }
+                        
+                        if (!isSilhouette) continue;
+                        
+                        const v0 = edge[0], v1 = edge[1];
+                        const x0 = txArr[v0], y0 = tyArr[v0], z0 = tzArr[v0];
+                        const x1 = txArr[v1], y1 = tyArr[v1], z1 = tzArr[v1];
+                        
+                        // Compute edge direction and perpendicular normal for offset sampling
+                        const dx = x1 - x0, dy = y1 - y0;
+                        const edgeLen2D = Math.sqrt(dx * dx + dy * dy);
+                        if (edgeLen2D < 1) continue; // Skip tiny edges
+                        
+                        // Perpendicular normal (rotated 90 degrees)
+                        const invLen = 1.0 / edgeLen2D;
+                        const nx = -dy * invLen;
+                        const ny = dx * invLen;
+                        
+                        // Adaptive sample count: ~4px spacing, min 4, max 20
+                        const NUM_SAMPLES = Math.max(4, Math.min(20, Math.ceil(edgeLen2D / 4)));
+                        const invSamples = 1.0 / NUM_SAMPLES;
+                        
+                        let segmentStart = -1;
+                        
+                        for (let s = 0; s <= NUM_SAMPLES; s++) {
+                            const t = s * invSamples;
+                            const px = x0 + dx * t;
+                            const py = y0 + dy * t;
+                            const pz = z0 + (z1 - z0) * t;
+                            const visible = isEdgePointVisible(px, py, pz, nx, ny);
+                            
+                            if (visible) {
+                                if (segmentStart === -1) segmentStart = s;
+                            } else if (segmentStart !== -1) {
+                                // Draw visible segment
+                                const t0 = segmentStart * invSamples;
+                                const t1 = (s - 1) * invSamples;
+                                ctx.moveTo(x0 + dx * t0, y0 + dy * t0);
+                                ctx.lineTo(x0 + dx * t1, y0 + dy * t1);
+                                segmentStart = -1;
+                            }
+                        }
+                        
+                        // Handle segment extending to edge end
+                        if (segmentStart !== -1) {
+                            const t0 = segmentStart * invSamples;
+                            ctx.moveTo(x0 + dx * t0, y0 + dy * t0);
+                            ctx.lineTo(x1, y1);
+                        }
+                    }
+                    
+                    ctx.stroke();
+                }
+            }
+            
+            // Draw edges for TRANSPARENT mode only (opaque mode draws edges per-face above)
+            if (isTransparent && CAMERA.render.showEdges) {
+                ctx.beginPath();
+                
+                // Use cached faceVisible for edge visibility
+                const edgeArr = edges;
+                const edgeLen = edgeArr.length;
+                const e2f = edgeToFaces;
+                const fVisible = faceVisible;
+                const txArr = transformedX;
+                const tyArr = transformedY;
+                
+                for (let i = 0; i < edgeLen; i++) {
+                    const adjacentFaces = e2f[i];
+                    const adjLen = adjacentFaces.length;
+                    let edgeVis = false;
+                    
+                    for (let j = 0; j < adjLen; j++) {
+                        if (fVisible[adjacentFaces[j]]) {
+                            edgeVis = true;
+                            break;
+                        }
+                    }
+                    
+                    if (edgeVis) {
+                        const edge = edgeArr[i];
+                        ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
+                        ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
+                    }
+                }
+                
+                ctx.stroke();
+            }
+        } else if ((CAMERA.backfaceCull.enabled || CAMERA.depthCull.enabled) && faceCount > 0) {
+            // WIREFRAME MODE with Culling
+            ctx.strokeStyle = WIREFRAME_COLOR;
+            ctx.lineWidth = 0.3;
+            
+            const useBackfaceCull = CAMERA.backfaceCull.enabled;
+            const useDepthCull = CAMERA.depthCull.enabled;
+            const fVisible = faceVisible;
+            const fIsFront = faceIsFrontFacing;
+            const fCount = faceCount;
+            const thresholdZ = modelCenterZ + CAMERA.depthCull.threshold;
+            const tzArr = transformedZ;
+            
+            // Cache face visibility and front-facing state first
+            for (let i = 0; i < fCount; i++) {
+                // 1. INLINED Front Check
+                const offset = faceOffsets[i];
+                const v0 = faceIndices[offset];
+                const v1 = faceIndices[offset + 1];
+                const v2 = faceIndices[offset + 2];
+                const x0 = transformedX[v0], y0 = transformedY[v0];
+                const x1 = transformedX[v1], y1 = transformedY[v1];
+                const x2 = transformedX[v2], y2 = transformedY[v2];
+                const signedArea = (x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0);
+                const isFront = signedArea > 0;
+                
+                fIsFront[i] = isFront ? 1 : 0;
+                
+                // Backface culling
+                if (useBackfaceCull && !isFront) {
+                    fVisible[i] = 0;
+                    continue;
+                }
+                
+                // Depth culling
+                if (useDepthCull) {
+                    // Calculate AvgZ inline
+                    let sumZ = tzArr[v0];
+                    const len = faceLengths[i];
+                    for (let j = 1; j < len; j++) {
+                        sumZ += tzArr[faceIndices[offset + j]];
+                    }
+                    if ((sumZ / len) >= thresholdZ) {
+                         fVisible[i] = 0;
+                         continue;
+                    }
+                }
+                fVisible[i] = 1;
+            }
+            
+            ctx.beginPath();
+            
+            const edgeArr = edges;
+            const edgeLen = edgeArr.length;
+            const e2f = edgeToFaces;
+            const txArr = transformedX;
+            const tyArr = transformedY;
+            
+            for (let i = 0; i < edgeLen; i++) {
+                const adjacentFaces = e2f[i];
+                const adjLen = adjacentFaces.length;
+                let edgeVis = false;
+                
+                for (let j = 0; j < adjLen; j++) {
+                    if (fVisible[adjacentFaces[j]]) {
+                        edgeVis = true;
+                        break;
+                    }
+                }
+                
+                if (edgeVis) {
+                    const edge = edgeArr[i];
+                    ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
+                    ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
+                }
+            }
+            
+            ctx.stroke();
+        } else {
+            // WIREFRAME MODE without Z-Culling
+            ctx.strokeStyle = WIREFRAME_COLOR;
+            ctx.lineWidth = 0.3;
+            ctx.beginPath();
+            
+            const edgeArr = edges;
+            const edgeLen = edgeArr.length;
+            const txArr = transformedX;
+            const tyArr = transformedY;
+            
+            for (let i = 0; i < edgeLen; i++) {
+                const edge = edgeArr[i];
+                ctx.moveTo(txArr[edge[0]], tyArr[edge[0]]);
+                ctx.lineTo(txArr[edge[1]], tyArr[edge[1]]);
+            }
+            
+            ctx.stroke();
         }
         
-        ctx.stroke();
+        // Draw silhouettes for NON-OPAQUE modes
+        // (Opaque mode silhouettes are handled above with proper painter's algorithm occlusion)
+        // 
+        // MODE-SPECIFIC BEHAVIOR:
+        // - OPAQUE SOLID: Already handled above (silhouettes drawn first, then faces paint over)
+        // - TRANSPARENT SOLID: All silhouettes visible ON TOP (can see through)
+        // - WIREFRAME: Front-facing silhouettes only (unless culling is OFF)
+        //
+        if (CAMERA.render.showSilhouette && faceCount > 0) {
+            const isOpaqueSolid = CAMERA.render.mode === 'solid' && CAMERA.render.solidType === 'opaque';
+            
+            // Skip - opaque silhouettes already drawn with proper occlusion
+            if (isOpaqueSolid) {
+                // Do nothing - handled above
+            } else {
+                const useBackfaceCull = CAMERA.backfaceCull.enabled;
+                const fCount = faceCount;
+                
+                // INLINE: Compute front-facing state for all faces (Performance)
+                // We re-compute this here because the previous computation might have been skipped 
+                // or we are in a different mode branch.
+                const offsetArr = faceOffsets;
+                const indicesArr = faceIndices;
+                const txArr = transformedX;
+                const tyArr = transformedY;
+                const fIsFront = faceIsFrontFacing;
+
+                for (let i = 0; i < fCount; i++) {
+                    const offset = offsetArr[i];
+                    // Triangle signed area check
+                    const v0 = indicesArr[offset];
+                    const v1 = indicesArr[offset + 1];
+                    const v2 = indicesArr[offset + 2];
+                    const x0 = txArr[v0], y0 = tyArr[v0];
+                    const signedArea = (txArr[v1] - x0) * (tyArr[v2] - y0) - (txArr[v2] - x0) * (tyArr[v1] - y0);
+                    fIsFront[i] = signedArea > 0 ? 1 : 0;
+                }
+                
+                ctx.beginPath();
+                
+                const edgeLen = edges.length;
+                
+                for (let i = 0; i < edgeLen; i++) {
+                    const adjacentFaces = edgeToFaces[i];
+                    const edge = edges[i];
+                    
+                    if (adjacentFaces.length === 1) {
+                        // Boundary edge
+                        const isFront = fIsFront[adjacentFaces[0]];
+                        
+                        // Strict Outline: Only show front-facing boundary edges
+                        // If wireframe/transparent, we essentially want the "outline" of the volume
+                        if (!isFront) continue;
+                        
+                        ctx.moveTo(txArr[edge[0]] | 0, tyArr[edge[0]] | 0);
+                        ctx.lineTo(txArr[edge[1]] | 0, tyArr[edge[1]] | 0);
+
+                    } else if (adjacentFaces.length === 2) {
+                        const isFront1 = fIsFront[adjacentFaces[0]];
+                        const isFront2 = fIsFront[adjacentFaces[1]];
+                        
+                        // Silhouette edge: one face front-facing, one back-facing
+                        if (isFront1 !== isFront2) {
+                            ctx.moveTo(txArr[edge[0]] | 0, tyArr[edge[0]] | 0);
+                            ctx.lineTo(txArr[edge[1]] | 0, tyArr[edge[1]] | 0);
+                        }
+                    }
+                }
+                
+                ctx.strokeStyle = FOREGROUND;
+                ctx.lineWidth = 0.6;
+                ctx.stroke();
+            }
+        }
     } else {
         // Show placeholder text when no model is loaded
         ctx.fillStyle = "#333";
@@ -928,6 +2114,14 @@ function frame() {
     ctx.fillStyle = "#666";
     ctx.font = "12px monospace";
     ctx.fillText(`${fps} FPS`, 10, 20);
+    if (CAMERA.render.mode === 'solid') {
+        ctx.fillText(`Solid${CAMERA.render.showEdges ? ' + Edges' : ''}`, 10, 36);
+    } else if (CAMERA.backfaceCull.enabled || CAMERA.depthCull.enabled) {
+        const modes = [];
+        if (CAMERA.backfaceCull.enabled) modes.push('BF');
+        if (CAMERA.depthCull.enabled) modes.push('Depth');
+        ctx.fillText(`Cull: ${modes.join('+')}`, 10, 36);
+    }
     
     requestAnimationFrame(frame);
 }
