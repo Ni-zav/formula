@@ -1079,6 +1079,134 @@ game.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 // ============================================
+// Touch Interaction (Pinch Zoom & Rotate)
+// ============================================
+let touchStartX = 0;
+let touchStartY = 0;
+let touchStartDistance = 0;
+let isTouching = false;
+let lastTouchAngle = 0;
+let lastTouchPitch = 0;
+let lastTouchZoom = 0;
+
+game.addEventListener('touchstart', (e) => {
+    e.preventDefault(); // Prevent scrolling while touching canvas
+    
+    if (e.touches.length === 1) {
+        // Single touch - Rotate
+        isTouching = true;
+        touchStartX = e.touches[0].clientX;
+        touchStartY = e.touches[0].clientY;
+        
+        // Pause auto-rotation while dragging
+        savedSpeedDuringDrag = CAMERA.rotationSpeed;
+        CAMERA.rotationSpeed = 0;
+        speedSlider.value = 0;
+        speedValue.textContent = '0.0x';
+        if (mobileSpeedSlider) {
+            mobileSpeedSlider.value = 0;
+            mobileSpeedValue.textContent = '0.0x';
+        }
+        
+        // Save current values to apply delta
+        lastTouchAngle = angle;
+        lastTouchPitch = CAMERA.pitch;
+        
+    } else if (e.touches.length === 2) {
+        // Double touch - Pinch Zoom
+        isTouching = true;
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        touchStartDistance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Save current zoom
+        lastTouchZoom = CAMERA.type === 'perspective' ? CAMERA.perspectiveZoom : CAMERA.orthoZoom;
+    }
+}, { passive: false });
+
+game.addEventListener('touchmove', (e) => {
+    e.preventDefault(); 
+    if (!isTouching) return;
+    
+    if (e.touches.length === 1) {
+        // Rotate logic
+        const currentX = e.touches[0].clientX;
+        const currentY = e.touches[0].clientY;
+        
+        const deltaX = currentX - touchStartX;
+        const deltaY = currentY - touchStartY;
+        
+        // Sensitivity factors
+        const rotSensitivity = 0.01; 
+        const pitchSensitivity = 0.3;
+        
+        // Update Angle (Horizontal swipe)
+        let newAngle = lastTouchAngle + (deltaX * rotSensitivity);
+        // Normalize angle
+        while (newAngle >= TWO_PI) newAngle -= TWO_PI;
+        while (newAngle < 0) newAngle += TWO_PI;
+        angle = newAngle;
+        
+        // Update Pitch (Vertical swipe)
+        let newPitch = lastTouchPitch + (deltaY * pitchSensitivity);
+        // Normalize pitch 0-360
+        while (newPitch >= 360) newPitch -= 360;
+        while (newPitch < 0) newPitch += 360;
+        CAMERA.pitch = Math.round(newPitch);
+        
+        // Sync UI Sliders
+        const angleDeg = Math.round(newAngle * 180 / Math.PI) % 360;
+        const normalizedDeg = angleDeg < 0 ? 360 + angleDeg : angleDeg;
+        
+        rotationSlider.value = normalizedDeg;
+        rotationValue.textContent = `${normalizedDeg}°`;
+        if (mobileRotationSlider) {
+             mobileRotationSlider.value = normalizedDeg;
+             mobileRotationValue.textContent = `${normalizedDeg}°`;
+        }
+        
+        pitchSlider.value = CAMERA.pitch;
+        pitchValue.textContent = `${CAMERA.pitch}°`;
+        if (mobilePitchSlider) {
+             mobilePitchSlider.value = CAMERA.pitch;
+             mobilePitchValue.textContent = `${CAMERA.pitch}°`;
+        }
+        
+    } else if (e.touches.length === 2) {
+        // Pinch Zoom Logic
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const currentDistance = Math.sqrt(dx * dx + dy * dy);
+        
+        if (touchStartDistance > 0) {
+            const scaleFactor = currentDistance / touchStartDistance;
+            
+            // Apply zoom
+            let newZoom = lastTouchZoom * scaleFactor;
+            newZoom = Math.max(0.2, Math.min(3.0, newZoom)); // Clamp limits
+            
+            if (CAMERA.type === 'perspective') {
+                CAMERA.perspectiveZoom = newZoom;
+            } else {
+                CAMERA.orthoZoom = newZoom;
+            }
+            
+            // Update UI
+            zoomSlider.value = newZoom;
+            zoomValue.textContent = `${newZoom.toFixed(1)}x`;
+        }
+    }
+}, { passive: false });
+
+game.addEventListener('touchend', (e) => {
+    // If lifting last finger, end touch
+    if (e.touches.length === 0) {
+        isTouching = false;
+        // Optionally restore speed if desired, or leave stopped
+    }
+});
+
+// ============================================
 // Derived camera values
 // ============================================
 function getFocalScale() {
