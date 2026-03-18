@@ -1295,6 +1295,206 @@ let depthGrid = null; // Reusable depth grid buffer
 let vs = null;
 let fs = null;
 
+function normalizeCycle(cycle) {
+    const length = cycle.length;
+    if (length === 0) return cycle;
+
+    let minPos = 0;
+    for (let i = 1; i < length; i++) {
+        if (cycle[i] < cycle[minPos]) minPos = i;
+    }
+
+    const forward = new Array(length);
+    const backward = new Array(length);
+
+    for (let i = 0; i < length; i++) {
+        forward[i] = cycle[(minPos + i) % length];
+        backward[i] = cycle[(minPos - i + length) % length];
+    }
+
+    for (let i = 0; i < length; i++) {
+        if (forward[i] !== backward[i]) {
+            return forward[i] < backward[i] ? forward : backward;
+        }
+    }
+
+    return forward;
+}
+
+function isPlanarCycle(cycle, vertices, tolerance = 0.02) {
+    if (cycle.length < 3) return false;
+
+    const p0 = vertices[cycle[0]];
+    let normalX = 0;
+    let normalY = 0;
+    let normalZ = 0;
+    let hasNormal = false;
+
+    for (let i = 1; i < cycle.length - 1 && !hasNormal; i++) {
+        const p1 = vertices[cycle[i]];
+        const p2 = vertices[cycle[i + 1]];
+        const ax = p1.x - p0.x;
+        const ay = p1.y - p0.y;
+        const az = p1.z - p0.z;
+        const bx = p2.x - p0.x;
+        const by = p2.y - p0.y;
+        const bz = p2.z - p0.z;
+
+        normalX = ay * bz - az * by;
+        normalY = az * bx - ax * bz;
+        normalZ = ax * by - ay * bx;
+
+        const length = Math.sqrt(normalX * normalX + normalY * normalY + normalZ * normalZ);
+        if (length > 1e-8) {
+            normalX /= length;
+            normalY /= length;
+            normalZ /= length;
+            hasNormal = true;
+        }
+    }
+
+    if (!hasNormal) return false;
+
+    for (let i = 1; i < cycle.length; i++) {
+        const p = vertices[cycle[i]];
+        const distance = Math.abs(
+            normalX * (p.x - p0.x) +
+            normalY * (p.y - p0.y) +
+            normalZ * (p.z - p0.z)
+        );
+
+        if (distance > tolerance) return false;
+    }
+
+    return true;
+}
+
+function isChordlessCycle(cycle, adjacencySets) {
+    const length = cycle.length;
+
+    for (let i = 0; i < length; i++) {
+        const a = cycle[i];
+        const previous = cycle[(i - 1 + length) % length];
+        const next = cycle[(i + 1) % length];
+        const neighbors = adjacencySets[a];
+
+        for (const b of neighbors) {
+            if (b === previous || b === next) continue;
+
+            for (let j = 0; j < length; j++) {
+                if (cycle[j] !== b) continue;
+                if (j !== i && j !== (i + 1) % length && j !== (i - 1 + length) % length) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    return true;
+}
+
+function orientFaceOutward(face, vertices) {
+    if (face.length < 3) return face;
+
+    const p0 = vertices[face[0]];
+    const p1 = vertices[face[1]];
+    const p2 = vertices[face[2]];
+
+    const ax = p1.x - p0.x;
+    const ay = p1.y - p0.y;
+    const az = p1.z - p0.z;
+    const bx = p2.x - p0.x;
+    const by = p2.y - p0.y;
+    const bz = p2.z - p0.z;
+
+    const nx = ay * bz - az * by;
+    const ny = az * bx - ax * bz;
+    const nz = ax * by - ay * bx;
+
+    let cx = 0;
+    let cy = 0;
+    let cz = 0;
+    for (let i = 0; i < face.length; i++) {
+        const p = vertices[face[i]];
+        cx += p.x;
+        cy += p.y;
+        cz += p.z;
+    }
+
+    const dot = nx * cx + ny * cy + nz * cz;
+    return dot < 0 ? [...face].reverse() : face;
+}
+
+function inferFacesFromGraph(vertices, sourceFaces) {
+    const vertexCount = vertices.length;
+    const edgeSet = new Set();
+    const adjacencySets = Array.from({ length: vertexCount }, () => new Set());
+
+    function addEdge(a, b) {
+        const low = Math.min(a, b);
+        const high = Math.max(a, b);
+        const key = `${low},${high}`;
+        if (!edgeSet.has(key)) {
+            edgeSet.add(key);
+            adjacencySets[a].add(b);
+            adjacencySets[b].add(a);
+        }
+    }
+
+    for (const face of sourceFaces) {
+        if (face.length < 2) continue;
+        for (let i = 0; i < face.length; i++) {
+            addEdge(face[i], face[(i + 1) % face.length]);
+        }
+    }
+
+    const maxCycleLength = Math.min(12, vertexCount);
+    const seenCycles = new Set();
+    const inferredFaces = [];
+    const visited = new Uint8Array(vertexCount);
+    const path = [];
+
+    function cycleKey(cycle) {
+        return cycle.join(',');
+    }
+
+    function pushCycle(cycle) {
+        const normalized = normalizeCycle(cycle);
+        const key = cycleKey(normalized);
+        if (seenCycles.has(key)) return;
+        if (!isChordlessCycle(normalized, adjacencySets)) return;
+        if (!isPlanarCycle(normalized, vertices)) return;
+        seenCycles.add(key);
+        inferredFaces.push(orientFaceOutward(normalized, vertices));
+    }
+
+    function dfs(start, current, depth) {
+        visited[current] = 1;
+
+        for (const next of adjacencySets[current]) {
+            if (next === start) {
+                if (depth >= 3) {
+                    pushCycle(path.slice());
+                }
+            } else if (!visited[next] && next > start && depth < maxCycleLength) {
+                path.push(next);
+                dfs(start, next, depth + 1);
+                path.pop();
+            }
+        }
+
+        visited[current] = 0;
+    }
+
+    for (let start = 0; start < vertexCount; start++) {
+        path.length = 0;
+        path.push(start);
+        dfs(start, start, 1);
+    }
+
+    return inferredFaces;
+}
+
 // ============================================
 // Initialize model from global vs/fs
 // ============================================
@@ -1312,6 +1512,19 @@ function initModel() {
         vsFlat[i * 3 + 1] = vs[i].y;
         vsFlat[i * 3 + 2] = vs[i].z;
     }
+
+    const sourceFaces = [];
+    const explicitFaces = [];
+
+    for (const face of fs) {
+        sourceFaces.push(face);
+        if (face.length >= 3) {
+            explicitFaces.push(face);
+        }
+    }
+
+    const inferredFaces = inferFacesFromGraph(vs, sourceFaces);
+    const allFaces = explicitFaces.concat(inferredFaces);
     
     // Build unique edge list with integer keys for fast lookup
     const edgeMap = new Map(); // key -> edge index
@@ -1322,7 +1535,7 @@ function initModel() {
         return a < b ? (a * 65536 + b) : (b * 65536 + a);
     }
     
-    for (const f of fs) {
+    for (const f of sourceFaces) {
         for (let i = 0; i < f.length; ++i) {
             const a = f[i];
             const b = f[(i + 1) % f.length];
@@ -1342,10 +1555,10 @@ function initModel() {
     // Count valid faces and total indices
     faceCount = 0;
     let totalFaceIndices = 0;
-    for (let i = 0; i < fs.length; i++) {
-        if (fs[i].length >= 3) {
+    for (let i = 0; i < allFaces.length; i++) {
+        if (allFaces[i].length >= 3) {
             faceCount++;
-            totalFaceIndices += fs[i].length;
+            totalFaceIndices += allFaces[i].length;
         }
     }
     
@@ -1383,8 +1596,8 @@ function initModel() {
     let faceIdx = 0;
     let indexOffset = 0;
     
-    for (let i = 0; i < fs.length; i++) {
-        const f = fs[i];
+    for (let i = 0; i < allFaces.length; i++) {
+        const f = allFaces[i];
         if (f.length < 3) continue;
         
         // Store face indices
